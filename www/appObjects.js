@@ -491,7 +491,7 @@ class Bullet extends EngineObject
 {
     constructor(pos, attacker) 
     { 
-        super(pos, vec2(0));
+        super(pos, vec2(.25));  // nonzero size so forEachObject overlaps register on BonusBox
         this.color = new Color(1,1,0,1);
         this.lastVelocity = this.velocity;
         this.setCollision();
@@ -537,6 +537,14 @@ class Bullet extends EngineObject
     
     collideWithObject(o)
     {
+        // BonusBox has no health system — delegate entirely to its own handler.
+        if (o.isBonusBox)
+        {
+            o.collideWithObject(this);
+            this.kill();
+            return 1;
+        }
+
         if (o.isGameObject)
         {
             o.damage(this.damage, this);
@@ -590,6 +598,83 @@ class Bullet extends EngineObject
     {
         drawRect(this.pos, vec2(.4,.5), new Color(1,1,1,.5), this.velocity.angle());
         drawRect(this.pos, vec2(.2,.5), this.color, this.velocity.angle());
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////
+
+class BonusBox extends EngineObject {
+    constructor(pos, color)
+    {
+        super(pos, vec2(1));
+        this.isGameObject = 1;          // required so Bullet.update's filter sees it
+        this.team         = team_none;   // neutral — player bullets (team_player != team_none) hit it
+        this.isBonusBox   = 1;
+        this.bobTimer     = 0;
+        this.spawnPos     = pos.copy();
+        this.gravityScale = 0;
+        this.boxColor     = color || new Color(1, .8, 0);
+        this.renderOrder  = 1e8;
+        this.setCollision(0, 0);        // non-solid; hit via manual overlap in Bullet.update
+    }
+
+    // Called by Bullet.collideWithObject when a bullet overlaps this box.
+    // Only accept hits from player-team bullets.
+    collideWithObject(o)
+    {
+        if (!o || o.team !== team_player)
+            return 0; // reject — enemy fire, physics contacts, etc.
+
+        if (this.destroyed || levelEndTimer.isSet())
+            return 1;
+
+        playSound(sound_bonusbox, this.spawnPos);
+
+        // celebratory burst
+        new ParticleEmitter(
+            this.spawnPos, 1.2, .3, 300, PI,
+            0, undefined,
+            this.boxColor, new Color(1,1,1,.8),
+            this.boxColor.scale(1,.5), new Color(1,1,0,0),
+            .6, .4, .05, .3, .2,
+            .95, .8, .2, PI, .3,
+            .6, 0, 1
+        );
+
+        levelEndTimer.set();
+        this.destroy();
+        return 1;
+    }
+
+    update()
+    {
+        super.update();
+        this.bobTimer += 1 / 60;
+        // Anchor position to spawnPos so no drift from physics interactions.
+        this.pos = this.spawnPos.add(vec2(0, Math.sin(this.bobTimer * 4) * .3));
+    }
+
+    render()
+    {
+        const pulse  = .4 + .3 * Math.sin(this.bobTimer * 3);
+        const pos    = this.pos;
+        const c      = this.boxColor;
+
+        // additive glow beacon underneath
+        setBlendMode(1);
+        drawRect(pos, vec2(2.2), c.scale(1, pulse * .6));
+        drawRect(pos, vec2(1.6), c.scale(1, pulse));
+        setBlendMode(0);
+
+        // solid box body (no rotation)
+        drawRect(pos, vec2(1),   c);
+        drawRect(pos, vec2(.85), c.scale(.6));
+
+        // bright cross / star marker on face
+        drawRect(pos, vec2(.55, .12), new Color(1,1,1,.9));
+        drawRect(pos, vec2(.12, .55), new Color(1,1,1,.9));
     }
 }
 

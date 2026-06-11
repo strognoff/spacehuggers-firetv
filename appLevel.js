@@ -753,6 +753,19 @@ function nextLevel()
         }
     });
 
+    // ── Spawn one BonusBox at a random ground position ────────────────────────
+    // Try up to 20 random x positions to find a clear ground tile.
+    for (let tries = 20; tries--;)
+    {
+        const bx = rand(levelSize.x - 20, 20);
+        const hit = tileCollisionRaycast(vec2(bx, levelSize.y), vec2(bx, 0));
+        if (hit && abs(checkpointPos.x - bx) > 15)
+        {
+            new BonusBox(hit.add(vec2(0, 2)), randColor(new Color(.5,.5,.2), new Color(1,1,.6)));
+            break;
+        }
+    }
+
     // hack, subtract off warm up time from main game timer
     //gameTimer.time += warmUpTime;
     levelTimer.set();
