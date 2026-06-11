@@ -1,0 +1,11 @@
+{
+  "appId": "com.spacehuggers.firetv",
+  "appName": "Space Huggers",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

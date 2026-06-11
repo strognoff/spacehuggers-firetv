@@ -1,0 +1,9 @@
+Fire TV requires a 320x180 banner.png.
+After running `npx cap add android`, drop a 320x180 PNG into:
+  android/app/src/main/res/drawable-xhdpi/banner.png
+
+Until you do, the app will still build but Amazon Appstore will reject the APK
+for "missing banner." You can generate a placeholder with ImageMagick:
+  convert -size 320x180 xc:'#000' -fill white -gravity center \
+    -pointsize 28 -annotate 0 'Space Huggers' \
+    android/app/src/main/res/drawable-xhdpi/banner.png

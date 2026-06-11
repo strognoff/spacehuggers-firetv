@@ -8,8 +8,10 @@
 
 const clampCamera = !debug;
 const lowGraphicsSettings = glOverlay = !window['chrome']; // only chromium uses high settings
-const startCameraScale = 4*16;
-const defaultCameraScale = 4*16;
+// Fire TV: scale 56 (was 64) — gives the player more presence on a 16:9
+// 720p canvas and reduces the "lost in the level" feeling.
+const startCameraScale = 4*14;
+const defaultCameraScale = 4*14;
 const maxPlayers = 4;
 
 const team_none = 0;
@@ -115,7 +117,15 @@ engineInit(
     {
         const player = players[0];
         if (!player.isDead())
-            cameraPos = cameraPos.lerp(player.pos, clamp(player.getAliveTime()/2));
+        {
+            // Fire TV / wide-screen fix: the original formula was
+            // clamp(aliveTime/2), which is 0 on level start and ramps to 1
+            // over 2 seconds. That meant the player was off-screen below
+            // the camera for the first ~1s. Floor the lerp at 0.1 so the
+            // camera starts following immediately, but still eases in.
+            const lerp = max(.1, clamp(player.getAliveTime()/2));
+            cameraPos = cameraPos.lerp(player.pos, lerp);
+        }
     }
     else
     {
@@ -172,6 +182,25 @@ engineInit(
     mainContext.fillRect(0,0,mainCanvas.width, mainCanvas.height);
 
     drawStars();
+
+    // Fire TV / controller hint: show a small key-binding strip in the
+    // bottom-left of the canvas. Switches between gamepad glyphs, the
+    // Fire TV remote, and keyboard labels depending on the last input used.
+    {
+        const w = mainCanvas.width, h = mainCanvas.height;
+        mainContext.save();
+        mainContext.globalAlpha = .7;
+        mainContext.font = '24px arial';
+        mainContext.textBaseline = 'top';
+        mainContext.fillStyle = '#fff';
+        const label = isUsingFireTVRemote
+            ? 'D-Pad Move  OK Shoot   \u275A\u275A Pause   \u23EA Restart   \u23E9 Next'
+            : isUsingGamepad
+                ? '[A] Shoot    [B] Roll    [X] Grenade    [Y] Thrust    D-Pad Move'
+                : '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move';
+        mainContext.fillText(label, 16, h - 36);
+        mainContext.restore();
+    }
 },
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -221,4 +250,19 @@ engineInit(
     // fade in level transition
     const fade = levelEndTimer.isSet() ? percent(levelEndTimer.get(), 3, 1) : percent(levelTimer.get(), .5, 2);
     drawRect(cameraPos, vec2(1e3), new Color(0,0,0,fade))
+
+    // Fire TV pause overlay (drawn last so it covers everything)
+    if (paused)
+    {
+        mainContext.fillStyle = 'rgba(0,0,0,.6)';
+        mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+        mainContext.fillStyle = '#fff';
+        mainContext.font = 'bold 96px arial';
+        mainContext.textAlign = 'center';
+        mainContext.textBaseline = 'middle';
+        mainContext.fillText('PAUSED', mainCanvas.width/2, mainCanvas.height/2 - 40);
+        mainContext.font = '32px arial';
+        mainContext.fillText('Press Play/Pause on your Fire TV remote to resume', mainCanvas.width/2, mainCanvas.height/2 + 40);
+        mainContext.textBaseline = 'top';
+    }
 });

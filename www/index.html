@@ -1,0 +1,52 @@
+<head>
+<title>Space Huggers</title>
+<link rel=icon type=image/x-icon href='favicon.ico'/>
+<meta name="title" content="Space Huggers"></meta>
+<meta name="author" content="Frank Force"></meta>
+<meta name="description" content="A run and gun roguelike platformer with destructible environments"></meta>
+<meta name=viewport content='width=device-width,initial-scale=1,user-scalable=0'>
+<meta charset=utf-8>
+<style>
+/* Fire TV error overlay: only visible if the game throws on startup.
+   Sits above the canvas so a white-screen failure is diagnosable. */
+#errbox{display:none;position:fixed;left:0;top:0;width:100%;height:100%;
+  background:#000;color:#fff;font:20px monospace;padding:24px;box-sizing:border-box;
+  white-space:pre-wrap;overflow:auto;z-index:9999}
+#errbox.show{display:block}
+#errbox h1{color:#f55;font-size:24px;margin:0 0 12px 0}
+#errbox .hint{color:#aaa;font-size:16px;margin-top:16px}
+</style>
+</head>
+<body>
+<div id=errbox><h1>Space Huggers failed to start</h1><pre id=errtext></pre>
+<div class=hint>If you see this on a Fire TV, run:  adb logcat -d chromium:V *:E  to capture the full log.</div></div>
+<script>
+// Catch JS errors before the engine has a chance to swallow them. Anything
+// thrown in a script tag (including engineWebGL.js shader compile failures,
+// engine.js startup errors, etc.) ends up rendered in #errbox so a white
+// screen is diagnosable on-device.
+function showError(msg){
+  var box=document.getElementById('errbox');
+  var txt=document.getElementById('errtext');
+  if(!box||!txt) return;
+  txt.textContent += msg + '\n\n';
+  box.className = 'show';
+}
+window.addEventListener('error',     function(e){ showError('Error: ' + (e.message||e.error)); });
+window.addEventListener('unhandledrejection', function(e){ showError('Promise: ' + (e.reason && e.reason.stack || e.reason)); });
+</script>
+<script src=engine/engineUtil.js></script>
+<script src=engine/engineDebug.js></script>
+<script src=engine/engine.js></script>
+<script src=engine/engineObject.js></script>
+<script src=engine/engineWebGL.js></script>
+<script src=engine/engineDraw.js></script>
+<script src=engine/engineInput.js></script>
+<script src=engine/engineAudio.js></script>
+<script src=engine/engineTileLayer.js></script>
+<script src=engine/engineParticle.js></script>
+<script src=appObjects.js></script>
+<script src=appCharacters.js></script>
+<script src=appEffects.js></script>
+<script src=appLevel.js></script>
+<script src=app.js></script>

@@ -10,7 +10,26 @@
 
 'use strict';
 
-const glEnable = 1;     // can run without gl (texured coloring will be disabled)
+// can run without gl (textured coloring will be disabled)
+// detect WebGL 1.0 support at startup; older Fire TV WebViews may not have it
+//   - probing on a throwaway canvas can succeed while the real canvas later
+//     segfaults the GPU process on this device's driver, so we also expose
+//     glDisable() to fall back to Canvas2D if the engine's glInit() throws.
+let glEnable = (()=>
+{
+    try
+    {
+        const probe = document.createElement('canvas');
+        const ctx = probe.getContext('webgl') || probe.getContext('experimental-webgl');
+        if (!ctx) return 0;
+        return 1;
+    }
+    catch (e) { return 0; }
+})();
+
+// Disable WebGL at runtime (used by the engine to fall back to Canvas2D
+// when the WebView's GPU process crashes on Fire TV devices).
+const glDisable = ()=> { glEnable = 0; };
 let glCanvas, glContext, glTileTexture, glShader, glPositionData, glColorData, 
     glBatchCount, glDirty, glAdditive, glShrinkTilesX, glShrinkTilesY, glOverlay;
 
@@ -18,9 +37,15 @@ function glInit()
 {
     if (!glEnable) return;
 
-    // create the canvas and tile texture
+    // Fire TV: if the WebView's GPU process dies, switch to Canvas2D
+    // so the rest of the game keeps running. This fires when the renderer
+    // process crashes (the white-screen scenario).
+    const onContextLost = (e)=> { e.preventDefault(); glDisable(); };
     glCanvas = document.createElement('canvas');
+    glCanvas.addEventListener('webglcontextlost', onContextLost, false);
     glContext = glCanvas.getContext('webgl', {antialias:!pixelated});
+    if (!glContext) { glDisable(); return; }
+
     glTileTexture = glCreateTexture(tileImage);
     glShrinkTilesX = tileBleedShrinkFix/tileImageSize.x;
     glShrinkTilesY = tileBleedShrinkFix/tileImageSize.y;

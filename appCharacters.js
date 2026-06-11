@@ -779,6 +779,12 @@ class Player extends Character
         this.pressingThrow = !this.playerIndex && (mouseIsDown(2) || keyIsDown(67)) || gamepadIsDown(1, this.playerIndex);
         this.pressedDodge  = !this.playerIndex && (mouseIsDown(1) || keyIsDown(88)) || gamepadIsDown(3, this.playerIndex);
 
+        // Fire TV remote: tap-fire on OK. The remote can't hold a key down,
+        // so each OK press sets holdingShoot for one frame, producing one
+        // bullet. consumeTapFire() resets the flag.
+        if (!this.playerIndex && consumeTapFire())
+            this.holdingShoot = 1;
+
         super.update();
 
         // update walk sound

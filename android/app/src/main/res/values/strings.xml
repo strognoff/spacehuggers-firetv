@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Space Huggers</string>
+    <string name="title_activity_main">Space Huggers</string>
+    <string name="package_name">com.spacehuggers.firetv</string>
+    <string name="custom_url_scheme">com.spacehuggers.firetv</string>
+</resources>

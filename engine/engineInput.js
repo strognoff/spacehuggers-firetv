@@ -35,7 +35,15 @@ const mouseWasReleased = keyWasReleased;
 onkeydown   = e=>
 {
     if (debug && e.target != document.body) return;
-    e.repeat || (inputData[isUsingGamepad = 0][remapKeyCode(e.keyCode)] = {d:hadInput=1, p:1});
+    // Fire TV Media Remote detection: any media key, Enter, or Backspace
+    // marks the device as the remote. Real gamepads will reset this in
+    // the gamepad polling loop.
+    const c = e.keyCode;
+    if (c==13 || c==27 || c==8 || (c>=176 && c<=179))
+        isUsingFireTVRemote = 1;
+    else
+        isUsingFireTVRemote = 0;
+    e.repeat || (inputData[isUsingGamepad = 0][remapKeyCode(c)] = {d:hadInput=1, p:1});
 }
 onkeyup     = e=>
 {
@@ -57,12 +65,31 @@ onmousemove = e=>
 if(debug)
     onwheel = e=> e.ctrlKey || (mouseWheel = sign(e.deltaY));
 oncontextmenu = e=> !1; // prevent right click menu
-const remapKeyCode = c=> copyWASDToDpad ? c==87?38 : c==83?40 : c==65?37 : c==68?39 : c : c;
+// remap WASD to dpad, and Fire TV Media Remote keys to navigation actions.
+//   The upstream table maps media keys to combat actions (thrust, shoot,
+//   grenade) which is awkward on a TV remote. This version routes the
+//   media keys to navigation/pause; OK is consumed by the engine's tap-fire
+//   hook; Back is consumed and translated to Escape.
+//   MediaFastForward(176) -> N  (78)     next level
+//   MediaRewind    (177) -> R  (82)     restart run
+//   MediaStop      (178) -> Q  (81)     reserved / debug
+//   MediaPlayPause (179) -> 0  (consumed by togglePause keydown listener)
+//   Enter/OK       (13)  -> 91 ([)      consumed by tap-fire listener
+//   Backspace/Esc  (8/27)-> 27          consumed to prevent WebView back
+const remapFireTV = c=>
+    c==176 ? 78 :
+    c==177 ? 82 :
+    c==178 ? 81 :
+    c==179 ? 0  :
+    c==13  ? 91 :
+    c==8 || c==27 ? 27 : c;
+const remapKeyCode = c=> (c = remapFireTV(c), copyWASDToDpad ? c==87?38 : c==83?40 : c==65?37 : c==68?39 : c : c);
 
 ////////////////////////////////////////////////////////////////////
 // gamepad
 
 let isUsingGamepad = 0;
+let isUsingFireTVRemote = 0;
 let gamepadCount = 0;
 const gamepadStick       = (stick,  gamepad=0)=> gamepad < gamepadCount ? inputData[gamepad+1].stickData[stick] : vec2();
 const gamepadIsDown      = (button, gamepad=0)=> gamepad < gamepadCount ? keyIsDown     (button, gamepad+1) : 0;
@@ -114,9 +141,13 @@ function updateGamepads()
             // read buttons
             gamepad.buttons.map((button, j)=>
             {
-                inputData[i+1][j] = button.pressed ? {d:1, p:!gamepadIsDown(j,i)} : 
+                inputData[i+1][j] = button.pressed ? {d:1, p:!gamepadIsDown(j,i)} :
                 inputData[i+1][j] = {r:gamepadIsDown(j,i)}
-                isUsingGamepad |= button.pressed && !i;
+                if (button.pressed && !i)
+                {
+                    isUsingGamepad = 1;
+                    isUsingFireTVRemote = 0;
+                }
             });
         }
     }

@@ -26,11 +26,16 @@ const engineName = 'LittleJS';
 const engineVersion = 'v0.74';
 const FPS = 60, timeDelta = 1/FPS;
 const defaultFont = 'arial'; // font used for text rendering
-const maxWidth = 1920, maxHeight = 1200; // up to 1080p and 16:10
-const fixedWidth = 0; // native resolution
+const maxWidth = 1920, maxHeight = 1200; // up to 1080p and 16:10 (used only when fixedWidth=0)
+// Fire TV port: lock to 1920x1080 with built-in letterbox CSS in engineFrame()
+//const fixedWidth = 0; // native resolution
 //const fixedWidth = 1280, fixedHeight = 720; // 720p
 //const fixedWidth = 128,  fixedHeight = 128; // PICO-8
 //const fixedWidth = 240,  fixedHeight = 136; // TIC-80
+// Fire TV port: 720p internal resolution, upscaled via CSS to the 1080p display.
+// 1280x720 = 2.25x fewer pixels than 1920x1080 — significantly faster, especially
+// with the Canvas2D fallback path that some Fire TV WebViews need.
+const fixedWidth = 1280, fixedHeight = 720; // 720p internal, 1080p display via CSS scale
 
 // tile sheet settings
 //const defaultTilesFilename = 'a.png'; // everything goes in one tile sheet
@@ -45,6 +50,11 @@ const gravity = -.01;
 let mainCanvas=0, mainContext=0, mainCanvasSize=vec2();
 let engineObjects=[], engineCollideObjects=[];
 let frame=0, time=0, realTime=0, paused=0, frameTimeLastMS=0, frameTimeBufferMS=0, debugFPS=0;
+
+// Fire TV Media-Remote state (set by keydown listener, consumed by app code)
+let tapFireRequested = 0;
+const consumeTapFire = ()=> { const v = tapFireRequested; tapFireRequested = 0; return v; };
+const togglePause    = ()=> { paused = !paused; if (paused) clearInput(); };
 let cameraPos=vec2(), cameraScale=4*max(defaultTileSize.x, defaultTileSize.y);
 let tileImageSize, tileImageSizeInverse, shrinkTilesX, shrinkTilesY, drawCount;
 
@@ -67,8 +77,42 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         mainContext = mainCanvas.getContext('2d');
 
         debugInit();
-        glInit();
+        // Fire TV: WebGL GPU-process crashes on some devices. If glInit
+        // throws, the engine disables itself and falls back to Canvas2D.
+        try { glInit(); }
+        catch (e)
+        {
+            console.warn('WebGL init failed, falling back to Canvas2D:', e);
+            glDisable();
+        }
         appInit();
+
+        // Fire TV / mobile: pause when the WebView is backgrounded or
+        // loses visibility, and resume when foregrounded.
+        // (use addEventListener rather than setting onvisibilitychange directly,
+        // which throws ReferenceError in some WebViews.)
+        document.addEventListener('visibilitychange', ()=> paused = document.hidden, false);
+        window.onblur  = ()=> paused = 1;
+        window.onfocus = ()=> paused = 0;
+
+        // Fire TV Media Remote: Play/Pause (179) toggles the pause overlay,
+        // OK / Enter (13) requests a single tap-fire for player 0.
+        // Capture-phase listener so it runs before the engine's normal
+        // keydown handler in engineInput.js.
+        window.addEventListener('keydown', (e)=>
+        {
+            if (e.keyCode === 179)
+            {
+                e.preventDefault();
+                togglePause();
+            }
+            else if (e.keyCode === 13)
+            {
+                e.preventDefault();
+                tapFireRequested = 1;
+            }
+        }, true);
+
         engineUpdate();
     };
 
