@@ -220,8 +220,10 @@ let gameTimer = new Timer, levelTimer = new Timer, levelEndTimer = new Timer;
 let pendingLevelGenerate = 0;
 let pendingNextLevelResume = 0;
 // Fire TV: set after generateLevel() succeeds so applyArtToLevel() runs on
-// the *next* frame — giving the GPU one frame to release the old TileLayer
-// canvas textures before we allocate new large ones (prevents Skia OOM).
+// a later frame — giving the GPU 3 frames (~50ms) to release the old TileLayer
+// canvas SharedImage mailboxes before we allocate new large ones (prevents
+// Skia OOM → EGL_BAD_PARAMETER → WebGL context loss). One frame (16ms) was
+// not enough; empirically 3 frames clears the mailbox backlog.
 let pendingApplyArt = 0;
 
 let tileBackground;
@@ -783,9 +785,11 @@ function nextLevel()
         }
     }
 
-    // Phase 2 is deferred one frame (pendingApplyArt) so the GPU can release
-    // the old TileLayer canvas SharedImages before we allocate new large ones.
-    // Without this yield, Skia runs out of GPU memory → EGL_BAD_PARAMETER →
-    // WebGL context loss on Fire TV.
-    pendingApplyArt = 1;
+    // Phase 2 is deferred 3 frames (pendingApplyArt counts down 3→0) so the
+    // GPU can release the old TileLayer canvas SharedImage mailboxes before we
+    // allocate new large ones. Without this yield, Skia runs out of GPU memory
+    // → EGL_BAD_PARAMETER → WebGL context loss on Fire TV.
+    // One frame (16ms) was empirically insufficient; 3 frames (~50ms) clears
+    // the backlog on the Amazon WebView Chromium GPU process.
+    pendingApplyArt = 3;
 }

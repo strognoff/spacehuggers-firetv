@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.63';
+const APP_VERSION = '1.0.64';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -411,13 +411,15 @@ engineInit(
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appUpdatePost
 {
-    // Fire TV: Phase 2 of level setup — applyArtToLevel() deferred one frame
+    // Fire TV: Phase 2 of level setup — applyArtToLevel() deferred 3 frames
     // after generateLevel() so the GPU can release old TileLayer canvas
-    // SharedImages before we allocate new large ones (prevents Skia OOM →
-    // EGL_BAD_PARAMETER → WebGL context loss on level transition).
+    // SharedImage mailboxes before we allocate new large ones (prevents Skia
+    // OOM → EGL_BAD_PARAMETER → WebGL context loss on level transition).
+    // pendingApplyArt counts down 3→1 while we wait, then fires at 0.
     if (pendingApplyArt)
     {
-        pendingApplyArt = 0;
+        if (--pendingApplyArt)
+            return;
         finishLevelSetup();
         return;
     }
