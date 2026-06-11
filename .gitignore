@@ -13,6 +13,12 @@ android/captures/
 android/.idea/
 android/*.iml
 android/app/*.iml
+# Gradle wrapper zip — downloaded automatically by gradlew on first run.
+# Never commit this; it's 200+ MB and exceeds GitHub's 100 MB file limit.
+android/gradle/wrapper/gradle-*-all.zip
+android/gradle/wrapper/gradle-*.zip
+# Gradle wrapper jar — keep gradle-wrapper.jar (small, ~60KB); the -all.zip
+# is the distribution that gradlew downloads. The jar is the launcher.
 
 # Web build outputs
 www/engine/build/
