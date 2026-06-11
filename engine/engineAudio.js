@@ -35,13 +35,53 @@ function playSound(zzfxSound, pos, range=defaultSoundRange, volumeScale=1)
     zzfx(...zzfxSound);
 }
 
+// current music source and gain node (created lazily with audioContext)
+let musicSource  = 0;
+let musicGain    = 0;
+let musicMuted   = 0;
+let musicBuffers = 0; // last rendered [leftBuf, rightBuf] — reused on unmute
+
+// toggle music mute — 1 = muted, 0 = audible
+function setMusicMute(muted)
+{
+    musicMuted = muted ? 1 : 0;
+    if (musicGain)
+        musicGain.gain.value = musicMuted ? 0 : 1;
+
+    if (musicMuted)
+    {
+        // stop source to free audio-thread resources
+        if (musicSource) { try { musicSource.stop(); } catch(e) {} musicSource = 0; }
+    }
+    else if (!musicSource && musicBuffers && soundEnable)
+    {
+        // unmuting — replay the already-rendered buffers instantly (no CPU spike)
+        const src = zzfxP(...musicBuffers);
+        if (src) { src.loop = 1; musicSource = src; }
+    }
+}
+
 // render and play zzfxm music with an option to loop
 function playMusic(zzfxmMusic, loop=1) 
 {
     if (!soundEnable) return;
 
-    const source = zzfxP(...zzfxM(...zzfxmMusic));
-    source && (source.loop = loop);
+    // stop previous track
+    if (musicSource) { try { musicSource.stop(); } catch(e) {} musicSource = 0; }
+
+    // render to stereo buffers and cache them so unmute can replay
+    const buffers = zzfxM(...zzfxmMusic);
+    if (!buffers) return;
+    musicBuffers = buffers;
+
+    if (musicMuted) return; // rendered but don't play while muted
+
+    const source = zzfxP(...buffers);
+    if (source)
+    {
+        source.loop = loop;
+        musicSource = source;
+    }
     return source;
 }
 
@@ -170,8 +210,61 @@ function zzfx(
 ///////////////////////////////////////////////////////////////////////////////
 // ZzFX Music Renderer v2.0.3 by Keith Clark and Frank Force
 
-///////////////////////////////////////////////////////////////////////////////
-// ZzFX Music Renderer v2.0.3 by Keith Clark and Frank Force
+// ZzFX sample generator — same params as zzfx() but returns sample buffer
+const zzfxG = (
+    volume = 1, randomness = .05, frequency = 220, attack = 0, sustain = 0,
+    release = .1, shape = 0, shapeCurve = 1, slide = 0, deltaSlide = 0,
+    pitchJump = 0, pitchJumpTime = 0, repeatTime = 0, noise = 0, modulation = 0,
+    bitCrush = 0, delay = 0, sustainVolume = 1, decay = 0, tremolo = 0
+) => {
+    let PI2 = PI*2, sign = v => v>0?1:-1,
+        startSlide = slide *= 500 * PI2 / zzfxR / zzfxR, b=[],
+        startFrequency = frequency *= (1 + randomness*2*Math.random() - randomness) * PI2 / zzfxR,
+        t=0, tm=0, i=0, j=1, r=0, c=0, s=0, f, length;
+
+    attack = attack * zzfxR + 9;
+    decay *= zzfxR;
+    sustain *= zzfxR;
+    release *= zzfxR;
+    delay *= zzfxR;
+    deltaSlide *= 500 * PI2 / zzfxR**3;
+    modulation *= PI2 / zzfxR;
+    pitchJump *= PI2 / zzfxR;
+    pitchJumpTime *= zzfxR;
+    repeatTime = repeatTime * zzfxR | 0;
+
+    for(length = attack + decay + sustain + release + delay | 0; i < length; b[i++] = s) {
+        if (!(++c%(bitCrush*100|0))) {
+            s = shape? shape>1? shape>2? shape>3?
+                Math.sin((t%PI2)**3) :
+                Math.max(Math.min(Math.tan(t),1),-1) :
+                1-(2*t/PI2%2+2)%2 :
+                1-4*abs(Math.round(t/PI2)-t/PI2) :
+                Math.sin(t);
+            s = (repeatTime ?
+                    1 - tremolo + tremolo*Math.sin(PI2*i/repeatTime)
+                    : 1) *
+                sign(s)*(abs(s)**shapeCurve) *
+                volume * (
+                i < attack ? i/attack :
+                i < attack + decay ?
+                1-((i-attack)/decay)*(1-sustainVolume) :
+                i < attack + decay + sustain ?
+                sustainVolume :
+                i < length - delay ?
+                (length - i - delay)/release * sustainVolume :
+                0);
+            s = delay ? s/2 + (delay > i ? 0 :
+                (i<length-delay? 1 : (length-i)/delay) *
+                b[i-delay|0]/2) : s;
+        }
+        f = (frequency += slide += deltaSlide) * Math.cos(modulation*tm++);
+        t += f - f*noise*(1 - (Math.sin(i)+1)*1e9%2);
+        if (j && ++j > pitchJumpTime) { frequency += pitchJump; startFrequency += pitchJump; j = 0; }
+        if (repeatTime && !(++r % repeatTime)) { frequency = startFrequency; slide = startSlide; j = j || 1; }
+    }
+    return b;
+};
 
 function zzfxM(instruments, patterns, sequence, BPM = 125) 
 {
@@ -271,3 +364,24 @@ function zzfxM(instruments, patterns, sequence, BPM = 125)
 
     return [leftChannelBuffer, rightChannelBuffer];
 }
+
+// ZzFXM player — feeds stereo buffers from zzfxM() into Web Audio via musicGain
+const zzfxP = (left, right) => {
+    if (!left || !left.length) return;
+    if (!audioContext)
+        audioContext = new (window.AudioContext || webkitAudioContext);
+    // create shared gain node once; apply current mute state immediately
+    if (!musicGain) {
+        musicGain = audioContext.createGain();
+        musicGain.gain.value = musicMuted ? 0 : 1;
+        musicGain.connect(audioContext.destination);
+    }
+    const buf = audioContext.createBuffer(2, left.length, zzfxR);
+    buf.getChannelData(0).set(left);
+    buf.getChannelData(1).set(right && right.length ? right : left);
+    const src = audioContext.createBufferSource();
+    src.buffer = buf;
+    src.connect(musicGain); // route through gain instead of direct to destination
+    src.start();
+    return src;
+};

@@ -22,6 +22,121 @@ const tileBackgroundRenderOrder = -2e3;
 
 // level objects
 let players=[], playerLives, tileLayer, tileBackgroundLayer, totalKills;
+let score = 0, levelScore = 0, levelKills = 0, levelStartTime = 0;
+
+// Procedural ZzFXM music generator — produces a unique track each call.
+// Uses Math.random() so it never affects the seeded level-generation RNG.
+function generateMusic() {
+    const rng = Math.random.bind(Math);
+    const ri  = n => Math.floor(rng() * n);
+
+    // ── Scale ─────────────────────────────────────────────────────────────────
+    const scales = [
+        [0,2,4,7,9],         // major pentatonic  — bright & uplifting
+        [0,3,5,7,10],        // minor pentatonic  — tense & driving
+        [0,2,4,5,7,9,11],    // major             — heroic
+        [0,2,3,5,7,8,10],    // natural minor     — dark & moody
+        [0,2,3,5,7,9,10],    // dorian            — funky & cool
+    ];
+    const scaleNotes = scales[ri(scales.length)];
+    const root = 12 + ri(6);          // root note offset 12–17
+    const bpm  = 90 + ri(5) * 10;     // tempo 90 / 100 / 110 / 120 / 130 BPM
+
+    // Convert scale degree → absolute ZzFXM note number
+    const sn = (degree, octave = 0) => {
+        const len = scaleNotes.length;
+        const d   = ((degree % len) + len) % len;
+        const o   = Math.floor(degree / len);
+        return root + scaleNotes[d] + (octave + o) * 12;
+    };
+
+    // ── Instruments ───────────────────────────────────────────────────────────
+    // [vol, rand, freq, attack, sustain, release, shape, shapeCurve,
+    //  slide, deltaSlide, pitchJump, pitchJumpTime, repeatTime, noise,
+    //  modulation, bitCrush, delay, sustainVolume, decay, tremolo]
+    const leadShape = ri(2);   // 0=sine smooth  1=triangle punchy
+    const tremolo   = rng() < .5 ? .15 : 0;
+    const lead = [.5, 0, 220, .01, .1,  .18, leadShape, 1.5, 0, 0, 0, 0, 0, 0, .2, 0, 0, .8, 0, tremolo];
+    const bass = [.8, 0, 110,  0,  .08, .12, 2,         1,   0, 0, 0, 0, 0, 0,  0, 0, 0,  1, 0, 0      ];
+    const pad  = [.3, 0, 220, .04, .18, .22, 0,         1,   0, 0, 0, 0, 0, 0, .4, 0, 0, .7, 0, rng()<.5?.2:0];
+    const perc = [.5, 0, 100,  0,  0,   .07, 4,         1, -.4, 0, 0, 0, 0, .6,  0, 0, 0,  1, 0, 0      ];
+    const instruments = [lead, bass, pad, perc];
+
+    // ── Pattern generators (16 beats each) ────────────────────────────────────
+    const B = 16;
+
+    const genLead = chordRoot => {
+        const ch = [0, 0]; // inst=lead, pan=centre
+        let last = 0;
+        for (let i = 0; i < B; i++) {
+            const downbeat = (i & 3) === 0;
+            const onbeat   = (i & 1) === 0;
+            if (downbeat || (onbeat && rng() < .55) || rng() < .18) {
+                const deg = downbeat ? ri(3) : ri(scaleNotes.length);
+                const oct = rng() < .25 ? 1 : 0;
+                const n   = sn(deg + (downbeat ? chordRoot : chordRoot + ri(2)), oct);
+                ch.push(n !== last ? n : 0);
+                last = n;
+            } else {
+                ch.push(0);
+            }
+        }
+        return ch;
+    };
+
+    const genBass = chordRoot => {
+        const ch = [1, 0]; // inst=bass, pan=centre
+        for (let i = 0; i < B; i++) {
+            if      ((i & 3) === 0)              ch.push(sn(chordRoot, -1));           // root on beat
+            else if ((i & 3) === 2 && rng()<.6)  ch.push(sn(chordRoot + (rng()<.5?2:4), -1)); // fifth/third
+            else if (rng() < .08)                 ch.push(sn(chordRoot + ri(3), -1));  // walk
+            else                                  ch.push(0);
+        }
+        return ch;
+    };
+
+    const genPad = chordRoot => {
+        const ch = [2, rng()<.5?-.25:.25]; // inst=pad, slight panning for width
+        const arp = [0,2,4,2,1,3,2,1].map(d => sn(d + chordRoot));
+        for (let i = 0; i < B; i++)
+            ch.push(rng() < .55 ? arp[i % arp.length] : 0);
+        return ch;
+    };
+
+    const genPerc = () => {
+        const ch = [3, 0]; // inst=perc, pan=centre
+        for (let i = 0; i < B; i++) {
+            if      ((i & 3) === 0)              ch.push(10); // kick on 1
+            else if ((i & 3) === 2)              ch.push(16); // snare on 3
+            else if ((i & 1) === 1 && rng()<.6)  ch.push(22); // hi-hat off-beats
+            else                                  ch.push(0);
+        }
+        return ch;
+    };
+
+    // ── Chord progressions (scale degrees) ───────────────────────────────────
+    const progs = [
+        [0,3,4,3],   // I–IV–V–IV  (classic rock)
+        [0,5,3,4],   // I–VI–IV–V  (50s pop / hopeful)
+        [0,2,4,3],   // I–III–V–IV (heroic ascent)
+        [0,4,3,4],   // I–V–IV–V   (driving anthem)
+        [0,5,4,3],   // I–VI–V–IV  (descending tension)
+    ];
+    const prog = progs[ri(progs.length)];
+
+    // One ZzFXM pattern per chord
+    const patterns = prog.map(cr => [
+        genLead(cr),
+        genBass(cr),
+        genPad(cr),
+        genPerc(),
+    ]);
+
+    // Play the full progression twice = 8-bar loop
+    const sequence = [0, 1, 2, 3, 0, 1, 2, 3];
+
+    return [instruments, patterns, sequence, bpm];
+}
 
 // level settings
 let levelSize, level, levelSeed, levelEnemyCount, levelWarmup;
@@ -42,6 +157,7 @@ const resetGame=()=>
 {
     levelEndTimer.unset();
     gameTimer.set(totalKills = level = 0);
+    score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0;
     nextLevel(playerLives = 6);
 }
 
@@ -267,6 +383,9 @@ function buildBase()
         floorWidth = max(floorWidth + randSeeded(8,-8),9)|0;
         floorBottomCenterPos.y += floorHeight;
         floorBottomCenterPos.x += randSeeded(oldFloorWidth - floorWidth+1)|0;
+        // snap to integer so tile collision coords always match visual tile positions
+        floorBottomCenterPos.x = floorBottomCenterPos.x|0;
+        floorBottomCenterPos.y = floorBottomCenterPos.y|0;
         previousFloorHeight = floorHeight;
     }
 
@@ -289,6 +408,7 @@ function buildBase()
 function generateLevel()
 {
     levelEndTimer.unset();
+    levelScore = 0; levelKills = 0; levelStartTime = time;
 
     // remove all objects that are not persistnt or are descendants of something persitant
     for(const o of engineObjects)
@@ -482,6 +602,7 @@ function applyArtToLevel()
 
 function nextLevel()
 {
+    score += levelScore;
     playerLives += 4; // three for beating a level plus 1 for respawning
     levelEnemyCount = 15 + min(level * 30, 300);
     ++level;
@@ -502,6 +623,7 @@ function nextLevel()
     const firstCheckpoint = new Checkpoint(checkpointPos).setActive();
 
     applyArtToLevel();
+    try { playMusic(generateMusic(), 1); } catch(e) {}
 
     const warmUpTime = 2;
     for(let i=warmUpTime * FPS; i--;)
@@ -525,8 +647,11 @@ function nextLevel()
     //gameTimer.time += warmUpTime;
     levelTimer.set();
 
-    // spawn player
+    // spawn player (Player constructor creates the weapon internally)
     players = [];
     new Player(checkpointPos);
+    if (typeof players !== 'undefined' && players[0] && players[0].weapon) {
+        players[0].weapon.weaponType = weaponType_pistol;
+    }
     //new Enemy(checkpointPos.add(vec2(3))); // test enemy
 }

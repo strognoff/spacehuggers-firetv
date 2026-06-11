@@ -281,6 +281,7 @@ class Character extends GameObject
 
         makeBlood(this.pos, 300);
         playSound(sound_die, this.pos);
+        cameraShake = min(1, cameraShake + 0.12);
 
         this.team = team_none;
         this.health = 0;
@@ -543,11 +544,18 @@ class Enemy extends Character
                     if (rand()<.05)
                         this.facePlayerTimer.set(rand(2,.5));
 
-                    // random jump
-                    if (rand()<(this.type < type_strong ? .0005 : .005))
+                    // random jump — 4× bias when player is above; also jump near ladders
                     {
-                        this.pressedJumpTimer.set(.1);
-                        this.holdJumpTimer.set(rand(.2));
+                        const playerAbove = this.sawPlayerPos.y > this.pos.y;
+                        const baseJumpChance = this.type < type_strong ? .0005 : .005;
+                        const jumpChance = playerAbove ? baseJumpChance * 4 : baseJumpChance;
+                        const nearLadder = getTileCollisionData(this.pos.add(vec2(1,0))) == tileType_ladder ||
+                                           getTileCollisionData(this.pos.add(vec2(-1,0))) == tileType_ladder;
+                        if (rand() < jumpChance || nearLadder && rand() < .02)
+                        {
+                            this.pressedJumpTimer.set(.1);
+                            this.holdJumpTimer.set(rand(.2));
+                        }
                     }
                     
                     // random movement
@@ -661,7 +669,16 @@ class Enemy extends Character
             return 0;
 
         super.kill(damagingObject);
-        levelWarmup || ++totalKills;
+        if (!levelWarmup) {
+            ++totalKills;
+            ++levelKills;
+            levelScore += 100 * (level + 1);
+            // 35% weapon drop chance — shotgun or plasma only (pistol is starting weapon)
+            if (Math.random() < 0.35) {
+                const pickupType = Math.random() < 0.5 ? weaponType_shotgun : weaponType_plasma;
+                new WeaponPickup(this.pos, pickupType);
+            }
+        }
     }
 }
 

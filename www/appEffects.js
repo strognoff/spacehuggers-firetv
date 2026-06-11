@@ -179,6 +179,8 @@ function explosion(pos, radius=2)
     debugFire && debugCircle(pos, maxRangeSquared**.5, '#f00', 2);
     debugFire && debugCircle(pos, radius**.5, '#ff0', 2);
 
+    cameraShake = min(1, cameraShake + radius * 0.15);
+
     // smoke
     new ParticleEmitter(
         pos, radius/2, .2, 50*radius, PI, // pos, emitSize, emitTime, emitRate, emiteCone

@@ -6,6 +6,10 @@
 
 'use strict';
 
+const weaponType_pistol  = 0;
+const weaponType_shotgun = 1;
+const weaponType_plasma  = 2;
+
 class GameObject extends EngineObject 
 {
     constructor(pos, size, tileIndex, tileSize, angle)
@@ -405,12 +409,13 @@ class Grenade extends GameObject
 
 class Weapon extends EngineObject 
 {
-    constructor(pos, parent) 
+    constructor(pos, parent, weaponType = weaponType_pistol) 
     { 
         super(pos, vec2(.6), 4, vec2(8));
 
         // weapon settings
         this.isWeapon = 1;
+        this.weaponType = weaponType;
         this.fireTimeBuffer = this.localAngle = 0;
         this.recoilTimer = new Timer;
 
@@ -435,9 +440,14 @@ class Weapon extends EngineObject
     {
         super.update();
 
-        const fireRate = 8;
-        const bulletSpeed = .5;
-        const spread = .1;
+        // weapon stats: [fireRate, bulletCount, spread, bulletSpeed, bulletRange]
+        const weaponStats = [
+            [0.25, 1,  0.05, 0.5, 20],  // pistol
+            [0.5,  5,  0.2,  0.4, 12],  // shotgun
+            [0.15, 1,  0.02, 0.8, 30],  // plasma
+        ];
+        const stats = weaponStats[this.weaponType] || weaponStats[0];
+        const [fireInterval, bulletCount, spread, bulletSpeed, bulletRange] = stats;
 
         this.mirror = this.parent.mirror;
         this.fireTimeBuffer += timeDelta;
@@ -449,14 +459,18 @@ class Weapon extends EngineObject
         {
             // slow down enemy bullets
             const speed = bulletSpeed * (this.parent.isPlayer ? 1 : .5);
-            const rate = 1/fireRate;
-            for(; this.fireTimeBuffer > 0; this.fireTimeBuffer -= rate)
+            for(; this.fireTimeBuffer > 0; this.fireTimeBuffer -= fireInterval)
             {
                 this.localAngle = -rand(.2,.15);
                 this.recoilTimer.set(rand(.4,.3));
-                const bullet = new Bullet(this.pos, this.parent);
-                const direction = vec2(this.getMirrorSign(speed), 0);
-                bullet.velocity = direction.rotate(rand(spread,-spread));
+
+                for (let i = 0; i < bulletCount; ++i)
+                {
+                    const bullet = new Bullet(this.pos, this.parent);
+                    const direction = vec2(this.getMirrorSign(speed), 0);
+                    bullet.velocity = direction.rotate(rand(spread,-spread));
+                    bullet.range = bulletRange;
+                }
 
                 this.shellEmitter.localAngle = -.8*this.getMirrorSign();
                 this.shellEmitter.emitParticle();
@@ -576,5 +590,57 @@ class Bullet extends EngineObject
     {
         drawRect(this.pos, vec2(.4,.5), new Color(1,1,1,.5), this.velocity.angle());
         drawRect(this.pos, vec2(.2,.5), this.color, this.velocity.angle());
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+class WeaponPickup extends EngineObject {
+    constructor(pos, pickupType = weaponType_pistol) {
+        super(pos, vec2(0)); // no sprite — drawn in render()
+        this.pickupType = pickupType;
+        this.bobTimer = 0;
+        this.spawnPos = pos.copy(); // fixed reference — bob offsets from here, no drift
+        this.gravityScale = 0;
+        this.setCollision(0, 0);
+    }
+    update() {
+        super.update();
+        this.bobTimer += 0.04;
+
+        // collect on player proximity
+        const p = players && players[0];
+        if (p && !p.isDead() && p.pos.distance(this.spawnPos) < 2) {
+            if (p.weapon)
+                p.weapon.weaponType = this.pickupType;
+            playSound(sound_jump, this.spawnPos);
+            this.destroy();
+        }
+    }
+    render() {
+        // colors: orange=shotgun, cyan=plasma
+        const colors = [new Color(1,1,0), new Color(1,.5,0), new Color(0,1,1)];
+        const c = colors[this.pickupType] || colors[0];
+
+        // bob purely as offset from spawn — no positional drift
+        const bobY = Math.sin(this.bobTimer) * 0.2;
+        const pos  = this.spawnPos.add(vec2(0, bobY));
+
+        // pulsing outer glow (additive blend)
+        const pulse = .4 + .3 * Math.sin(this.bobTimer * 2);
+        setBlendMode(1);
+        drawRect(pos, vec2(1.4), c.scale(1, pulse));
+        setBlendMode(0);
+
+        // solid inner body
+        drawRect(pos, vec2(.7), c);
+
+        // weapon-type marker above
+        if (this.pickupType === weaponType_shotgun) {
+            drawRect(pos.add(vec2(-.2, .7)), vec2(.18, .25), c); // twin barrels
+            drawRect(pos.add(vec2( .2, .7)), vec2(.18, .25), c);
+        } else {
+            drawRect(pos.add(vec2(0, .75)), vec2(.15, .4), c);   // tall spike = plasma
+        }
     }
 }
