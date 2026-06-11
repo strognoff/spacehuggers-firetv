@@ -62,7 +62,7 @@ function makeFire(pos = vec2())
         .5, 0, 1);             // randomness, collide, additive, randomColorLinear, renderOrder
 }
 
-function makeDebris(pos, color = new Color, amount = 100)
+function makeDebris(pos, color = new Color, amount = 50)
 {
     const color2 = color.lerp(new Color, .5);
     const emitter = new ParticleEmitter(
@@ -349,7 +349,8 @@ function destroyTile(pos, makeSound = 1, cleanNeighbors = 1, maxCascadeChance = 
 function drawStars()
 {
     randSeed = levelSeed;
-    for(let i = lowGraphicsSettings ? 400 : 1e3; i--;)
+    const starCount = lowGraphicsSettings ? 150 : 300;
+    for(let i = starCount; i--;)
     {
         let size = randSeeded(6, 1);
         let speed = randSeeded() < .9 ? randSeeded(5) : randSeeded(99,9);
@@ -394,7 +395,7 @@ function updateSky()
     
     if (rand() < .002)
     {
-        skyParticles.emitRate = clamp(skyParticles.emitRate + rand(200,-200), 500);
+        skyParticles.emitRate = clamp(skyParticles.emitRate + rand(120,-120), 200);
         skyParticles.angle = clamp(skyParticles.angle + rand(.3,-.3),PI+.5,PI-.5);
     }
    
@@ -447,6 +448,6 @@ function updateParallaxLayers()
         tileParallaxLayer.pos = cameraPos
             .subtract(tileParallaxLayer.size.multiply(tileParallaxLayer.scale).scale(.5))
             .add(cameraDeltaFromCenter.scale(1/cameraScale))
-            .subtract(vec2(0,150/cameraScale))
+            .subtract(vec2(0,150/cameraScale));
     });
 }

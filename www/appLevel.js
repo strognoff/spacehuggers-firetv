@@ -680,7 +680,7 @@ function applyArtToLevel()
                 .5, 1              // randomness, collide, additive, randomColorLinear, renderOrder
             );
         }
-        skyParticles.emitRate = precipitationEnable && rand()<.5 ? rand(500) : 0;
+        skyParticles.emitRate = precipitationEnable && rand()<.5 ? rand(200) : 0;
         skyParticles.angle = PI+rand(.5,-.5);
     }
 }

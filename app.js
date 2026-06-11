@@ -8,15 +8,15 @@
 
 const clampCamera = !debug;
 const lowGraphicsSettings = glOverlay = !window['chrome']; // only chromium uses high settings
-// Camera scale: 36px per world unit — shows ~35 tiles wide on 1280px canvas.
+// Camera scale: 36px per world unit on start, 32px default for a wider TV-friendly view.
 const startCameraScale = 4*9;
-const defaultCameraScale = 4*9;
+const defaultCameraScale = 4*8;
 const maxPlayers = 4;
 
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.54';
+const APP_VERSION = '1.0.56';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -159,6 +159,37 @@ const hudText = (txt, x, y, size, color='#fff', align='left') => {
     mainContext.shadowColor = 'rgba(0,0,0,0.8)';
     mainContext.shadowBlur = 4;
     mainContext.fillText(txt, x, y);
+    mainContext.restore();
+};
+const hudMonoText = (txt, x, y, size, color='#fff', align='left', bold=0) => {
+    mainContext.save();
+    mainContext.font = `${bold ? '700' : '500'} ${size}px monospace`;
+    mainContext.textAlign = align;
+    mainContext.textBaseline = 'middle';
+    mainContext.fillStyle = color;
+    mainContext.shadowColor = color;
+    mainContext.shadowBlur = bold ? 8 : 4;
+    mainContext.fillText(txt, x, y);
+    mainContext.restore();
+};
+// angular bracket HUD frame: 4 corner brackets, dim fill, no full outline
+const hudFrame = (x, y, w, h, color, alpha=.15) => {
+    const inset = 2;
+    const ix = x + inset, iy = y + inset, iw = w - inset*2, ih = h - inset*2;
+    const bracket = min(18, iw * .22, ih * .45);
+    mainContext.save();
+    mainContext.fillStyle = `rgba(0,0,0,${alpha})`;
+    mainContext.fillRect(ix, iy, iw, ih);
+    mainContext.strokeStyle = color;
+    mainContext.lineWidth = 1.5;
+    mainContext.shadowColor = color;
+    mainContext.shadowBlur = 8;
+    mainContext.beginPath();
+    mainContext.moveTo(ix, iy + bracket); mainContext.lineTo(ix, iy); mainContext.lineTo(ix + bracket, iy);
+    mainContext.moveTo(ix + iw - bracket, iy); mainContext.lineTo(ix + iw, iy); mainContext.lineTo(ix + iw, iy + bracket);
+    mainContext.moveTo(ix + iw, iy + ih - bracket); mainContext.lineTo(ix + iw, iy + ih); mainContext.lineTo(ix + iw - bracket, iy + ih);
+    mainContext.moveTo(ix + bracket, iy + ih); mainContext.lineTo(ix, iy + ih); mainContext.lineTo(ix, iy + ih - bracket);
+    mainContext.stroke();
     mainContext.restore();
 };
 
@@ -519,32 +550,62 @@ engineInit(
 
     // hudPill / hudText are defined at module scope (above drawNameEntry)
 
-    const pad = 14, pillH = 40, cw = mainCanvas.width, ch = mainCanvas.height;
+    const pad = 14, cw = mainCanvas.width, ch = mainCanvas.height;
+    const frameH = 60;
+    const labelColor = 'rgba(255,255,255,0.72)';
+    const bracketColor = '#7fdbff';
     const totalScore = score + levelScore;
+    const drawHudPanel = (x, y, w, label, value, color, align='left') =>
+    {
+        hudFrame(x, y, w, frameH, bracketColor);
+        const accentW = w * .3;
+        const accentY = y + frameH - 10;
+        mainContext.save();
+        mainContext.strokeStyle = color;
+        mainContext.lineWidth = 1.5;
+        mainContext.shadowColor = color;
+        mainContext.shadowBlur = 8;
+        mainContext.beginPath();
+        if (align == 'center')
+        {
+            mainContext.moveTo(x + (w - accentW)/2, accentY);
+            mainContext.lineTo(x + (w + accentW)/2, accentY);
+        }
+        else if (align == 'right')
+        {
+            mainContext.moveTo(x + w - 14 - accentW, accentY);
+            mainContext.lineTo(x + w - 14, accentY);
+        }
+        else
+        {
+            mainContext.moveTo(x + 14, accentY);
+            mainContext.lineTo(x + 14 + accentW, accentY);
+        }
+        mainContext.stroke();
+        mainContext.restore();
 
-    // ── Score pill — top left ──────────────────────────────────────────────────
-    hudPill(pad, pad, 230, pillH);
-    hudText('⭐ ' + totalScore, pad + 18, pad + pillH/2, 22, '#ffe066');
+        const textX = align == 'center' ? x + w/2 : align == 'right' ? x + w - 14 : x + 14;
+        hudMonoText(label, textX, y + 18, 16, labelColor, align);
+        hudMonoText(String(value), textX, y + 38, 24, color, align, 1);
+    };
 
-    // ── Level pill — top center ────────────────────────────────────────────────
-    hudPill(cw/2 - 90, pad, 180, pillH);
-    hudText('LEVEL  ' + level, cw/2, pad + pillH/2, 22, '#8ef', 'center');
+    // ── Score panel — top left ────────────────────────────────────────────────
+    drawHudPanel(pad, pad, 240, 'SCORE', totalScore, '#ffb347');
 
-    // ── Lives pill — top right ─────────────────────────────────────────────────
-    hudPill(cw - pad - 160, pad, 160, pillH);
-    hudText('♥  ' + Math.max(0, playerLives), cw - pad - 18, pad + pillH/2, 22, '#f66', 'right');
+    // ── Level panel — top center ──────────────────────────────────────────────
+    drawHudPanel(cw/2 - 90, pad, 180, 'LEVEL', level, '#7fdbff', 'center');
 
-    // ── Enemies pill — bottom center ──────────────────────────────────────────
-    const enemyLabel = enemiesCount > 0 ? '👾 ' + enemiesCount + ' remaining' : '✓ Area clear';
-    const enemyColor = enemiesCount > 0 ? '#f96' : '#6f6';
-    hudPill(cw/2 - 130, ch - pad - pillH, 260, pillH);
-    hudText(enemyLabel, cw/2, ch - pad - pillH/2, 20, enemyColor, 'center');
+    // ── Lives panel — top right ───────────────────────────────────────────────
+    drawHudPanel(cw - pad - 170, pad, 170, 'LIVES', Math.max(0, playerLives), '#ff5050', 'right');
 
-    // ── Level-kills pill — bottom left (during play) ───────────────────────────
-    if (levelKills > 0) {
-        hudPill(pad, ch - pad - pillH, 200, pillH);
-        hudText('☠ ' + levelKills + ' kills  +' + levelScore, pad + 18, ch - pad - pillH/2, 18, '#ccc');
-    }
+    // ── Threats panel — bottom center ─────────────────────────────────────────
+    const threatsValue = enemiesCount > 0 ? enemiesCount + ' REMAINING' : 'AREA CLEAR';
+    const threatsColor = enemiesCount > 0 ? '#7fff7f' : '#ffb347';
+    drawHudPanel(cw/2 - 140, ch - pad - frameH, 280, 'THREATS', threatsValue, threatsColor, 'center');
+
+    // ── Kills panel — bottom left (during play) ───────────────────────────────
+    if (levelKills > 0)
+        drawHudPanel(pad, ch - pad - frameH, 220, 'KILLS', levelKills + '  +' + levelScore, '#ffffff');
 
     // ── LEVEL CLEAR overlay panel — stays until player presses OK ────────────
     if (typeof levelEndTimer !== 'undefined' && levelEndTimer.isSet()) {
