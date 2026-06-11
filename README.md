@@ -93,3 +93,76 @@ Good luck, have fun, and give space a hug for me.
 - Run engine\build\build.bat, to build app.zip which is the final result
 - It will also create a file called index.min.html you can use for testing
 - The zip size may vary by 20 bytes or so due to randomness of roadroller
+
+# Fire TV Port
+
+This fork packages the game as an Android app via [Capacitor](https://capacitorjs.com/) so it can run on Amazon Fire TV devices.
+
+## What changed from the upstream JS13K build
+
+- **Internal canvas resolution locked to 1280x720** (upscaled to 1080p via CSS). 2.25x fewer pixels than 1920x1080, dramatically smoother on Fire TV GPUs.
+- **`fixedWidth=1280, fixedHeight=720`** in `engine/engine.js` — pixel-perfect on Fire TV's 1080p display via the engine's built-in letterbox.
+- **WebGL detection + Canvas2D fallback** — older Fire TV WebViews whose GPU process crashes now run on Canvas2D silently.
+- **Fire TV Media-Remote key remap** in `engine/engineInput.js`:
+  - D-pad → move/jump (existing WASD arrow-key passthrough)
+  - OK (Enter) → tap-fire one bullet per press
+  - Play/Pause → toggle pause overlay
+  - Rewind → restart current run
+  - FastForward → next level
+  - Back → consumed (does not exit the app)
+- **Pause overlay** drawn in `app/app.js` `appRenderPost` — dim backdrop, "PAUSED" big text, resume instruction.
+- **Visibility-pause hook** — the game auto-pauses when the WebView is backgrounded and resumes on foreground.
+- **Controller-glyph HUD** bottom-left of the canvas — switches between Fire TV remote / gamepad / keyboard labels.
+- **`www/` mirror** of the source for Capacitor's `webDir`.
+- **`firetv-manifest.patch`** — adds the `LEANBACK_LAUNCHER` category, `uses-feature television`, and banner reference to `AndroidManifest.xml`.
+
+## Building the Android / Fire TV APK
+
+One-time setup on a machine with Android Studio installed:
+
+```bash
+npm install
+npx cap add android
+patch -p1 < firetv-manifest.patch
+```
+
+See `docs/SETUP.md` for the full toolchain setup (Node 18+, JDK 17, Android SDK, ANDROID_HOME).
+
+## Deploying to a Fire TV
+
+1. On the Fire TV: **Settings → My Fire TV → Developer Options** → enable **ADB Debugging** and **Apps from Unknown Sources**.
+2. Get the device IP (**Settings → My Fire TV → About → Network**).
+3. From your dev machine:
+   ```bash
+   adb connect <fire-tv-ip>:5555
+   ./scripts/build-and-deploy.sh <fire-tv-ip>:5555
+   ```
+   The script bumps the version, runs the asset check, syncs the Capacitor project, builds the debug APK, and installs it via `adb install -r`.
+
+## On-device controls (Fire TV remote)
+
+| Button | Action |
+|---|---|
+| D-pad | Move / jump |
+| OK (Center) | Shoot (tap to fire one bullet) |
+| Play / Pause | Toggle pause overlay |
+| Rewind | Restart run |
+| FastForward | Next level |
+| Back | Consumed (does not exit) |
+
+A real Xbox or PS controller paired over Bluetooth keeps the existing gamepad mapping (`A` shoot, `B` roll, `X` grenade, `Y` thrust, D-pad move).
+
+## If the app white-screens
+
+1. Look for the black `#errbox` overlay — any uncaught JS error appears there in white text.
+2. Capture a full logcat:
+   ```bash
+   adb logcat -c
+   adb logcat chromium:V *:E > /tmp/firetv-crash.log
+   # ... reproduce the crash, then Ctrl-C ...
+   ```
+3. Look for `Renderer process (NNNN) crash detected (code -1)` — that's the GPU process dying; the WebGL → Canvas2D fallback should kick in automatically.
+
+To force-Canvas2D (skip WebGL entirely), edit `www/engine/engineWebGL.js` line 15 to set `let glEnable = 0;`.
+
+See `FIRETV_DEPLOY.md` for the full debug playbook, `FIRETV_PORT.md` for the design overview, and `docs/SETUP.md` for first-time setup.
