@@ -24,7 +24,7 @@ const tileBackgroundRenderOrder = -2e3;
 let players=[], playerLives, tileLayer, tileBackgroundLayer, totalKills;
 let liveEnemies = [];
 let currentMusicStyle = 0, currentMusicStyleName = '';
-let score = 0, levelScore = 0, levelKills = 0, levelStartTime = 0;
+let score = 0, levelScore = 0, levelKills = 0, levelStartTime = 0, levelTimeBonus = 0;
 
 // Procedural ZzFXM music generator — produces a unique track each call.
 // Uses Math.random() so it never affects the seeded level-generation RNG.
@@ -233,7 +233,7 @@ const resetGame=()=>
 {
     levelEndTimer.unset();
     gameTimer.set(totalKills = level = 0);
-    score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0;
+    score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0; levelTimeBonus = 0;
     currentMusicStyle = 0;
     currentMusicStyleName = '';
     nextLevel(playerLives = 3);
@@ -689,6 +689,12 @@ function nextLevel()
 {
     if (!pendingNextLevelResume)
     {
+        // ── Faster-finish time bonus ──────────────────────────────────────────
+        // Reward players who clear the level quickly. Bonus starts at 1000 and
+        // drops by 5 per second of elapsed time, floored at 0.
+        const levelElapsed = time - levelStartTime;
+        levelTimeBonus = max(0, 1000 - levelElapsed * 5) | 0;
+        levelScore += levelTimeBonus;
         score += levelScore;
         if (level)
             playerLives += 1; // gain 1 extra life for clearing a level after the first

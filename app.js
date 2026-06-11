@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.58';
+const APP_VERSION = '1.0.59';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -612,6 +612,14 @@ engineInit(
     if (levelKills > 0)
         drawHudPanel(pad, ch - pad - frameH, 220, 'KILLS', levelKills + '  +' + levelScore, '#ffffff');
 
+    // ── Time panel — bottom right (during play, mirrors KILLS) ───────────────
+    if (!levelEndTimer.isSet()) {
+        const elapsed = Math.max(0, time - levelStartTime) | 0;
+        const mm = (elapsed / 60) | 0;
+        const ss = String(elapsed % 60).padStart(2, '0');
+        drawHudPanel(cw - pad - 180, ch - pad - frameH, 180, 'TIME', mm + ':' + ss, '#7fdbff', 'right');
+    }
+
     // ── LEVEL CLEAR overlay panel — stays until player presses OK ────────────
     if (typeof levelEndTimer !== 'undefined' && levelEndTimer.isSet()) {
         // dim the background
@@ -619,10 +627,12 @@ engineInit(
         mainContext.fillRect(0, 0, cw, ch);
 
         const ox = cw/2, oy = ch/2;
+        // Taller panel when there is a time bonus to show
+        const panelH = levelTimeBonus > 0 ? 260 : 220;
         mainContext.save();
         mainContext.fillStyle = 'rgba(0,0,0,0.82)';
         mainContext.beginPath();
-        mainContext.roundRect(ox - 280, oy - 110, 560, 220, 20);
+        mainContext.roundRect(ox - 280, oy - 110, 560, panelH, 20);
         mainContext.fill();
         // gold divider line
         mainContext.strokeStyle = '#ffe066';
@@ -634,9 +644,11 @@ engineInit(
         mainContext.restore();
         hudText('LEVEL CLEAR!', ox, oy - 48, 52, '#ffe066', 'center');
         hudText('Kills: ' + levelKills + '     Score: +' + levelScore, ox, oy + 40, 28, '#fff', 'center');
-        // pulsing prompt
+        if (levelTimeBonus > 0)
+            hudText('+ TIME BONUS  ' + levelTimeBonus, ox, oy + 76, 22, '#7fdbff', 'center');
+        // pulsing prompt — pushed down when bonus line is present
         const pulse = .6 + .4 * Math.sin(Date.now() / 400);
-        hudText('Press OK to continue', ox, oy + 80, 22, `rgba(180,220,255,${pulse})`, 'center');
+        hudText('Press OK to continue', ox, oy + (levelTimeBonus > 0 ? 116 : 80), 22, `rgba(180,220,255,${pulse})`, 'center');
     }
 
     // fade only during level-start transition (not while end screen is shown)
