@@ -1,6 +1,6 @@
 {
   "name": "spacehuggers-firetv",
-  "version": "1.0.62",
+  "version": "1.0.63",
   "description": "Space Huggers - Fire TV port via Capacitor",
   "private": true,
   "type": "module",

@@ -39,7 +39,7 @@ const persistentParticleDestroyCallback = (particle)=>
 function makeBlood(pos, amount=50)
 {
     const emitter = new ParticleEmitter(
-        pos, 1, .1, amount, PI, // pos, emitSize, emitTime, emitRate, emiteCone
+        pos, 1, .1, lowGraphicsSettings ? amount>>1 : amount, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         undefined, undefined,   // tileIndex, tileSize
         new Color(1,0,0), new Color(.5,0,0), // colorStartA, colorStartB
         new Color(1,0,0), new Color(.5,0,0), // colorEndA, colorEndB
@@ -54,7 +54,7 @@ function makeBlood(pos, amount=50)
 function makeFire(pos = vec2())
 {
     return new ParticleEmitter(
-        pos, 1, 0, 60, PI, // pos, emitSize, emitTime, emitRate, emiteCone
+        pos, 1, 0, lowGraphicsSettings ? 20 : 60, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         0, undefined,   // tileIndex, tileSize
         new Color(1,1,0), new Color(1,.5,.5), // colorStartA, colorStartB
         new Color(1,0,0), new Color(1,.5,.1), // colorEndA, colorEndB
@@ -182,9 +182,16 @@ function explosion(pos, radius=2)
 
     cameraShake = min(1, cameraShake + radius * 0.15);
 
+    // On low-end hardware (Fire TV) scale back particle counts heavily so a
+    // chain of explosions doesn't stall the render loop.
+    const smokeRate = lowGraphicsSettings ? 15*radius : 50*radius;
+    const fireRate  = lowGraphicsSettings ? 25*radius : 100*radius;
+    const smokeTime = lowGraphicsSettings ? .1 : .2;
+    const fireTime  = lowGraphicsSettings ? .05 : .1;
+
     // smoke
     new ParticleEmitter(
-        pos, radius/2, .2, 50*radius, PI, // pos, emitSize, emitTime, emitRate, emiteCone
+        pos, radius/2, smokeTime, smokeRate, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         0, undefined,        // tileIndex, tileSize
         new Color(0,0,0), new Color(0,0,0), // colorStartA, colorStartB
         new Color(0,0,0,0), new Color(0,0,0,0), // colorEndA, colorEndB
@@ -195,7 +202,7 @@ function explosion(pos, radius=2)
 
     // fire
     new ParticleEmitter(
-        pos, radius/2, .1, 100*radius, PI, // pos, emitSize, emitTime, emitRate, emiteCone
+        pos, radius/2, fireTime, fireRate, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         0, undefined,        // tileIndex, tileSize
         new Color(1,.5,.1), new Color(1,.1,.1), // colorStartA, colorStartB
         new Color(1,.5,.1,0), new Color(1,.1,.1,0), // colorEndA, colorEndB
@@ -314,7 +321,12 @@ function destroyTile(pos, makeSound = 1, cleanNeighbors = 1, maxCascadeChance = 
     const layerData = tileLayer.getData(pos);
     if (layerData)
     {
-        makeDebris(centerPos, layerData.color.mutate());
+        // On low-end hardware skip per-tile debris during explosions (makeSound==0
+        // signals an explosion-driven destroy). The explosion's own particles cover
+        // the visual; skipping debris prevents hundreds of long-lived colliding
+        // particles from stalling the frame.
+        if (!lowGraphicsSettings || makeSound)
+            makeDebris(centerPos, layerData.color.mutate());
         makeSound && playSound(sound_destroyTile, centerPos);
 
         setTileCollisionData(pos, tileType_empty);
