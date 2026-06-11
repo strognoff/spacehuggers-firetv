@@ -3,7 +3,7 @@
 The empire is spreading like a plague across the galaxy and building outposts on remote planets.
 You are an elite rebel soldier tasked with wiping out those bases.
 Explore strange planets using your tools of destruction and eliminate the invaders!
-You have only 10 clones left, 3 more will be replenished after each mission.
+You have only 3 clones left, 3 more will be replenished after each mission.
 Good luck, have fun, and give space a hug for me.
 
 ## This game is only for learning purposes and not intended to be redistributed!
@@ -179,3 +179,37 @@ A real Xbox or PS controller paired over Bluetooth keeps the existing gamepad ma
 To force-Canvas2D (skip WebGL entirely), edit `www/engine/engineWebGL.js` line 15 to set `let glEnable = 0;`.
 
 See `FIRETV_DEPLOY.md` for the full debug playbook, `FIRETV_PORT.md` for the design overview, and `docs/SETUP.md` for first-time setup.
+
+# Running Locally
+
+The Capacitor build expects a `www/` mirror of the source. There are two ways to run the game on your dev machine.
+
+## Web (fastest, no Android toolchain)
+
+The `www/` folder is a self-contained static bundle — no bundler step. Serve it with any static server and open it in a browser:
+
+```bash
+npx serve www
+# or
+python3 -m http.server -d www
+```
+
+Then open the printed URL (e.g. `http://localhost:8000`). Chrome in full-screen mode gives the best experience. Edit the **root source files** (`app.js`, `appLevel.js`, `appCharacters.js`, etc.) and re-run `bash scripts/sync-www.sh` (or `npm run sync:source`) to mirror changes into `www/`, then refresh the browser.
+
+## Android (device or emulator)
+
+With Android Studio installed and `ANDROID_HOME` set up:
+
+```bash
+npm install
+npm run build:android    # checks www, syncs source, runs cap sync, builds debug APK
+npm run open:android     # opens android/ in Android Studio
+```
+
+From Android Studio, pick a device/emulator and press **Run**. To deploy a debug build to a connected device from the command line:
+
+```bash
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+For a full release build + install to a Fire TV, use `npm run deploy <fire-tv-ip>:5555` (see the Fire TV section above). Run `npm run prereqs` to verify your local toolchain (Node, JDK, Android SDK, `adb`) is in place.
