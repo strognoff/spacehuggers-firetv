@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.56';
+const APP_VERSION = '1.0.58';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -120,6 +120,10 @@ const updateNameEntry = ()=>
              keyWasPressed(91) || gamepadWasPressed(0))  // OK
     {
         const key = kbdKey(nameEntryRow, nameEntryCol);
+        // Snapshot fullness BEFORE we may append — confirmation only triggers
+        // when the buffer was already full, so the 3rd character gets at least
+        // one rendered frame before the game resets.
+        const wasAlreadyFull = nameEntryBuffer.length >= 3;
         if (key === '\u232B')
         {
             // Backspace
@@ -129,8 +133,9 @@ const updateNameEntry = ()=>
         {
             nameEntryBuffer += key;
         }
-        // Once buffer is full (3 chars), OK anywhere confirms.
-        if (nameEntryBuffer.length >= 3)
+        // Confirm only when the buffer was full *before* this keypress (i.e.
+        // the user pressed OK on a completed 3-letter name).
+        if (wasAlreadyFull && nameEntryBuffer.length >= 3)
         {
             addHighScore(nameEntryBuffer, nameEntryFinalScore, nameEntryFinalLevel);
             nameEntryActive = false;
@@ -868,20 +873,60 @@ engineInit(
     // since on the remote the keyboard hints (Z/Space) don't apply.
     else if (minDeadTime > 1 && playerLives <= 0)
     {
-        mainContext.fillStyle = 'rgba(0,0,0,.55)';
+        const cx = mainCanvas.width / 2, cy = mainCanvas.height / 2;
+        // dim backdrop
+        mainContext.fillStyle = 'rgba(0,0,0,0.72)';
         mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
-        mainContext.fillStyle = '#f55';
-        mainContext.font = 'bold 120px impact';
-        mainContext.textAlign = 'center';
-        mainContext.textBaseline = 'middle';
-        mainContext.fillText('GAME OVER', mainCanvas.width/2, mainCanvas.height/2 - 60);
-        mainContext.fillStyle = '#fff';
-        mainContext.font = '40px arial';
-        mainContext.fillText('Press OK  \u2014  or Rewind  \u2014  to restart', mainCanvas.width/2, mainCanvas.height/2 + 40);
-        mainContext.font = '28px arial';
-        mainContext.fillStyle = '#aaa';
-        mainContext.fillText('(Keyboard: Z, Space, or R  \u00B7  Gamepad: A)', mainCanvas.width/2, mainCanvas.height/2 + 90);
-        mainContext.textBaseline = 'top';
+
+        // panel background
+        mainContext.save();
+        mainContext.fillStyle = 'rgba(10,10,30,0.95)';
+        mainContext.beginPath();
+        mainContext.roundRect(cx - 280, cy - 200, 560, 400, 20);
+        mainContext.fill();
+        mainContext.strokeStyle = '#b8860b';
+        mainContext.lineWidth = 2.5;
+        mainContext.shadowColor = '#ffe066';
+        mainContext.shadowBlur = 14;
+        mainContext.stroke();
+        mainContext.restore();
+
+        // title
+        hudText('GAME OVER', cx, cy - 148, 64, '#ff4444', 'center');
+
+        // gold divider
+        mainContext.save();
+        mainContext.strokeStyle = '#665500';
+        mainContext.lineWidth = 1;
+        mainContext.beginPath();
+        mainContext.moveTo(cx - 220, cy - 104);
+        mainContext.lineTo(cx + 220, cy - 104);
+        mainContext.stroke();
+        mainContext.restore();
+
+        // stats
+        const finalScore = score + levelScore;
+        hudText('SCORE',        cx - 60, cy - 68, 16, '#888', 'right');
+        hudText(finalScore,     cx - 44, cy - 68, 28, '#ffb347', 'left');
+        hudText('LEVEL',        cx - 60, cy - 28, 16, '#888', 'right');
+        hudText(level,          cx - 44, cy - 28, 28, '#7fdbff', 'left');
+        hudText('KILLS',        cx - 60, cy + 12, 16, '#888', 'right');
+        hudText(totalKills + levelKills, cx - 44, cy + 12, 28, '#ffffff', 'left');
+
+        // gold divider
+        mainContext.save();
+        mainContext.strokeStyle = '#665500';
+        mainContext.lineWidth = 1;
+        mainContext.beginPath();
+        mainContext.moveTo(cx - 220, cy + 48);
+        mainContext.lineTo(cx + 220, cy + 48);
+        mainContext.stroke();
+        mainContext.restore();
+
+        // pulsing prompt
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 520);
+        hudText('Press OK to play again', cx, cy + 86, 26, `rgba(255,224,102,${pulse})`, 'center');
+        hudText('(Z, Space, R  \u00B7  Gamepad A  \u00B7  Rewind)', cx, cy + 124, 16, 'rgba(140,140,170,0.7)', 'center');
     }
 
     // On-screen name-entry keyboard (active after a qualifying game-over run).
