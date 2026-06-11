@@ -103,7 +103,9 @@ engineInit(
     for(const player of players)
         minDeadTime = min(minDeadTime, player && player.isDead() ? player.deadTimer.get() : 0);
 
-    if (minDeadTime > 3 && (keyWasPressed(90) || keyWasPressed(32) || gamepadWasPressed(0)) || keyWasPressed(82))
+    // Fire TV: also accept OK (raw 13) and the tap-fire mapped key (91)
+    // as restart triggers, since on the remote the user has no Z/Space/GpadA.
+    if (minDeadTime > 3 && (keyWasPressed(90) || keyWasPressed(32) || keyWasPressed(13) || keyWasPressed(91) || gamepadWasPressed(0)) || keyWasPressed(82))
         resetGame();
 
     if (levelEndTimer.get() > 3)
@@ -263,6 +265,27 @@ engineInit(
         mainContext.fillText('PAUSED', mainCanvas.width/2, mainCanvas.height/2 - 40);
         mainContext.font = '32px arial';
         mainContext.fillText('Press Play/Pause on your Fire TV remote to resume', mainCanvas.width/2, mainCanvas.height/2 + 40);
+        mainContext.textBaseline = 'top';
+    }
+
+    // Fire TV / game-over overlay: shown when all players are dead and
+    // lives are exhausted. Tells the user which button restarts the game,
+    // since on the remote the keyboard hints (Z/Space) don't apply.
+    else if (minDeadTime > 1 && playerLives <= 0)
+    {
+        mainContext.fillStyle = 'rgba(0,0,0,.55)';
+        mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+        mainContext.fillStyle = '#f55';
+        mainContext.font = 'bold 120px impact';
+        mainContext.textAlign = 'center';
+        mainContext.textBaseline = 'middle';
+        mainContext.fillText('GAME OVER', mainCanvas.width/2, mainCanvas.height/2 - 60);
+        mainContext.fillStyle = '#fff';
+        mainContext.font = '40px arial';
+        mainContext.fillText('Press OK  \u2014  or Rewind  \u2014  to restart', mainCanvas.width/2, mainCanvas.height/2 + 40);
+        mainContext.font = '28px arial';
+        mainContext.fillStyle = '#aaa';
+        mainContext.fillText('(Keyboard: Z, Space, or R  \u00B7  Gamepad: A)', mainCanvas.width/2, mainCanvas.height/2 + 90);
         mainContext.textBaseline = 'top';
     }
 });
