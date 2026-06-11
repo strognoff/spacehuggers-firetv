@@ -617,7 +617,7 @@ class BonusBox extends EngineObject {
         this.gravityScale = 0;
         this.boxColor     = color || new Color(1, .8, 0);
         this.renderOrder  = 1e8;
-        this.setCollision(0, 0);        // non-solid; hit via manual overlap in Bullet.update
+        this.setCollision(1, 0);        // collidable (so forEachObject finds it) but not solid (no physics blocking)
     }
 
     // Called by Bullet.collideWithObject when a bullet overlaps this box.
