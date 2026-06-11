@@ -219,6 +219,10 @@ let gameTimer = new Timer, levelTimer = new Timer, levelEndTimer = new Timer;
 // the GPU a chance to release the previous level's textures first.
 let pendingLevelGenerate = 0;
 let pendingNextLevelResume = 0;
+// Fire TV: set after generateLevel() succeeds so applyArtToLevel() runs on
+// the *next* frame — giving the GPU one frame to release the old TileLayer
+// canvas textures before we allocate new large ones (prevents Skia OOM).
+let pendingApplyArt = 0;
 
 let tileBackground;
 const setTileBackgroundData = (pos, data=0)=>
@@ -685,47 +689,10 @@ function applyArtToLevel()
     }
 }
 
-function nextLevel()
+// Phase 2 of level setup — called one frame after generateLevel() so the GPU
+// has had a chance to release the old TileLayer canvas textures (Skia OOM fix).
+function finishLevelSetup()
 {
-    if (!pendingNextLevelResume)
-    {
-        // ── Faster-finish time bonus ──────────────────────────────────────────
-        // Reward players who clear the level quickly. Bonus starts at 1000 and
-        // drops by 5 per second of elapsed time, floored at 0.
-        const levelElapsed = time - levelStartTime;
-        levelTimeBonus = max(0, 1000 - levelElapsed * 5) | 0;
-        levelScore += levelTimeBonus;
-        score += levelScore;
-        if (level)
-            playerLives += 1; // gain 1 extra life for clearing a level after the first
-        levelEnemyCount = 15 + min(level * 30, 300);
-        ++level;
-        levelSeed = randSeed = rand(1e9)|0;
-        levelSize = vec2(min(level*99,400),200);
-        levelColor = randColor(new Color(.2,.2,.2), new Color(.8,.8,.8));
-        levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
-        levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();
-        levelGroundColor = levelColor.mutate().add(new Color(.3,.3,.3)).clamp();
-    }
-    else
-        pendingNextLevelResume = 0;
-
-    // keep trying until a valid level is generated.
-    // Fire TV: cap retries per frame so the GPU gets a chance to release
-    // textures from the previous level before we allocate new ones. If we
-    // can't find a valid level in a few tries, yield a frame and retry.
-    // (Skia OOM happens when destroy + new level + new tile layers all
-    //  hit the GPU in a single frame.)
-    for (let levelTries = 0; generateLevel();)
-    {
-        if (++levelTries > 4) // 4 attempts per frame is plenty
-        {
-            pendingLevelGenerate = 1;
-            pendingNextLevelResume = 1;
-            return;
-        }
-    }
-
     // warm up level
     levelWarmup = 1;
 
@@ -754,7 +721,6 @@ function nextLevel()
     });
 
     // ── Spawn one BonusBox at a random ground position ────────────────────────
-    // Try up to 20 random x positions to find a clear ground tile.
     for (let tries = 20; tries--;)
     {
         const bx = rand(levelSize.x - 20, 20);
@@ -777,4 +743,49 @@ function nextLevel()
         players[0].weapon.weaponType = weaponType_pistol;
     }
     //new Enemy(checkpointPos.add(vec2(3))); // test enemy
+}
+
+function nextLevel()
+{
+    if (!pendingNextLevelResume)
+    {
+        // ── Faster-finish time bonus ──────────────────────────────────────────
+        // Reward players who clear the level quickly. Bonus starts at 1000 and
+        // drops by 5 per second of elapsed time, floored at 0.
+        const levelElapsed = time - levelStartTime;
+        levelTimeBonus = max(0, 1000 - levelElapsed * 5) | 0;
+        levelScore += levelTimeBonus;
+        score += levelScore;
+        if (level)
+            playerLives += 1; // gain 1 extra life for clearing a level after the first
+        levelEnemyCount = 15 + min(level * 30, 300);
+        ++level;
+        levelSeed = randSeed = rand(1e9)|0;
+        levelSize = vec2(min(level*99,400),200);
+        levelColor = randColor(new Color(.2,.2,.2), new Color(.8,.8,.8));
+        levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
+        levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();
+        levelGroundColor = levelColor.mutate().add(new Color(.3,.3,.3)).clamp();
+    }
+    else
+        pendingNextLevelResume = 0;
+
+    // Phase 1: generate terrain + place enemies/objects (destroys old tile canvases).
+    // Fire TV: cap retries per frame so the GPU gets a chance to release
+    // textures from the previous level before we allocate new ones.
+    for (let levelTries = 0; generateLevel();)
+    {
+        if (++levelTries > 4)
+        {
+            pendingLevelGenerate = 1;
+            pendingNextLevelResume = 1;
+            return;
+        }
+    }
+
+    // Phase 2 is deferred one frame (pendingApplyArt) so the GPU can release
+    // the old TileLayer canvas SharedImages before we allocate new large ones.
+    // Without this yield, Skia runs out of GPU memory → EGL_BAD_PARAMETER →
+    // WebGL context loss on Fire TV.
+    pendingApplyArt = 1;
 }

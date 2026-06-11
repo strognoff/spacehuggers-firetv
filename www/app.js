@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.61';
+const APP_VERSION = '1.0.62';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -411,6 +411,17 @@ engineInit(
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appUpdatePost
 {
+    // Fire TV: Phase 2 of level setup — applyArtToLevel() deferred one frame
+    // after generateLevel() so the GPU can release old TileLayer canvas
+    // SharedImages before we allocate new large ones (prevents Skia OOM →
+    // EGL_BAD_PARAMETER → WebGL context loss on level transition).
+    if (pendingApplyArt)
+    {
+        pendingApplyArt = 0;
+        finishLevelSetup();
+        return;
+    }
+
     // Fire TV: continue trying to generate a valid level. nextLevel() sets
     // pendingLevelGenerate when it couldn't find one in a few tries — we
     // resume here on the next frame, after the GPU has had a chance to
