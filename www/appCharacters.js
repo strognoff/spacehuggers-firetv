@@ -432,6 +432,7 @@ class Enemy extends Character
 
         new Weapon(this.pos, this);
          --levelEnemyCount;
+        liveEnemies.push(this);
 
         this.sightCheckFrame = rand(9)|0;
     }
@@ -667,6 +668,8 @@ class Enemy extends Character
         if (this.isDead())
             return 0;
 
+        const enemyIndex = liveEnemies.indexOf(this);
+        enemyIndex > -1 && liveEnemies.splice(enemyIndex, 1);
         super.kill(damagingObject);
         if (!levelWarmup) {
             ++totalKills;
@@ -680,6 +683,7 @@ class Enemy extends Character
         }
     }
 }
+
 
 ///////////////////////////////////////////////////////////////////////////////
 

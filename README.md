@@ -130,6 +130,19 @@ See `docs/SETUP.md` for the full toolchain setup (Node 18+, JDK 17, Android SDK,
 
 ## Deploying to a Fire TV
 
+### Source of truth / editing workflow
+
+- Edit the **root source files** (`app.js`, `appLevel.js`, `appCharacters.js`, etc.).
+- Treat **`www/` as a mirrored runtime bundle** for Capacitor (`webDir: "www"`).
+- Do **not** hand-edit `www/` unless you intentionally want a temporary runtime-only tweak.
+- `./scripts/build-and-deploy.sh` automatically:
+  - increments the app version,
+  - updates the in-game About version,
+  - syncs root source → `www/`,
+  - syncs Capacitor/Android assets,
+  - builds the APK,
+  - deploys it with `adb install -r`.
+
 1. On the Fire TV: **Settings → My Fire TV → Developer Options** → enable **ADB Debugging** and **Apps from Unknown Sources**.
 2. Get the device IP (**Settings → My Fire TV → About → Network**).
 3. From your dev machine:
@@ -137,7 +150,7 @@ See `docs/SETUP.md` for the full toolchain setup (Node 18+, JDK 17, Android SDK,
    adb connect <fire-tv-ip>:5555
    ./scripts/build-and-deploy.sh <fire-tv-ip>:5555
    ```
-   The script bumps the version, runs the asset check, syncs the Capacitor project, builds the debug APK, and installs it via `adb install -r`.
+   The script bumps the version, updates the in-game About version, syncs root source into `www/`, syncs the Capacitor project, builds the debug APK, and installs it via `adb install -r`.
 
 ## On-device controls (Fire TV remote)
 

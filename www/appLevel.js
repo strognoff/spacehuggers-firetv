@@ -22,6 +22,8 @@ const tileBackgroundRenderOrder = -2e3;
 
 // level objects
 let players=[], playerLives, tileLayer, tileBackgroundLayer, totalKills;
+let liveEnemies = [];
+let currentMusicStyle = 0, currentMusicStyleName = '';
 let score = 0, levelScore = 0, levelKills = 0, levelStartTime = 0;
 
 // Procedural ZzFXM music generator — produces a unique track each call.
@@ -29,113 +31,182 @@ let score = 0, levelScore = 0, levelKills = 0, levelStartTime = 0;
 function generateMusic() {
     const rng = Math.random.bind(Math);
     const ri  = n => Math.floor(rng() * n);
-
-    // ── Scale ─────────────────────────────────────────────────────────────────
-    const scales = [
-        [0,2,4,7,9],         // major pentatonic  — bright & uplifting
-        [0,3,5,7,10],        // minor pentatonic  — tense & driving
-        [0,2,4,5,7,9,11],    // major             — heroic
-        [0,2,3,5,7,8,10],    // natural minor     — dark & moody
-        [0,2,3,5,7,9,10],    // dorian            — funky & cool
-    ];
-    const scaleNotes = scales[ri(scales.length)];
-    const root = 12 + ri(6);          // root note offset 12–17
-    const bpm  = 90 + ri(5) * 10;     // tempo 90 / 100 / 110 / 120 / 130 BPM
-
-    // Convert scale degree → absolute ZzFXM note number
-    const sn = (degree, octave = 0) => {
-        const len = scaleNotes.length;
-        const d   = ((degree % len) + len) % len;
-        const o   = Math.floor(degree / len);
-        return root + scaleNotes[d] + (octave + o) * 12;
-    };
-
-    // ── Instruments ───────────────────────────────────────────────────────────
-    // [vol, rand, freq, attack, sustain, release, shape, shapeCurve,
-    //  slide, deltaSlide, pitchJump, pitchJumpTime, repeatTime, noise,
-    //  modulation, bitCrush, delay, sustainVolume, decay, tremolo]
-    const leadShape = ri(2);   // 0=sine smooth  1=triangle punchy
-    const tremolo   = rng() < .5 ? .15 : 0;
-    const lead = [.5, 0, 220, .01, .1,  .18, leadShape, 1.5, 0, 0, 0, 0, 0, 0, .2, 0, 0, .8, 0, tremolo];
-    const bass = [.8, 0, 110,  0,  .08, .12, 2,         1,   0, 0, 0, 0, 0, 0,  0, 0, 0,  1, 0, 0      ];
-    const pad  = [.3, 0, 220, .04, .18, .22, 0,         1,   0, 0, 0, 0, 0, 0, .4, 0, 0, .7, 0, rng()<.5?.2:0];
-    const perc = [.5, 0, 100,  0,  0,   .07, 4,         1, -.4, 0, 0, 0, 0, .6,  0, 0, 0,  1, 0, 0      ];
-    const instruments = [lead, bass, pad, perc];
-
-    // ── Pattern generators (16 beats each) ────────────────────────────────────
     const B = 16;
 
-    const genLead = chordRoot => {
-        const ch = [0, 0]; // inst=lead, pan=centre
-        let last = 0;
-        for (let i = 0; i < B; i++) {
-            const downbeat = (i & 3) === 0;
-            const onbeat   = (i & 1) === 0;
-            if (downbeat || (onbeat && rng() < .55) || rng() < .18) {
-                const deg = downbeat ? ri(3) : ri(scaleNotes.length);
-                const oct = rng() < .25 ? 1 : 0;
-                const n   = sn(deg + (downbeat ? chordRoot : chordRoot + ri(2)), oct);
-                ch.push(n !== last ? n : 0);
-                last = n;
-            } else {
-                ch.push(0);
+    const buildTrack = (style)=>
+    {
+        const scaleNotes = style.scales[ri(style.scales.length)];
+        const root = style.rootMin + ri(style.rootRange);
+        const bpm  = style.bpmMin + ri(style.bpmSteps) * style.bpmStep;
+
+        // Convert scale degree → absolute ZzFXM note number
+        const sn = (degree, octave = 0) => {
+            const len = scaleNotes.length;
+            const d   = ((degree % len) + len) % len;
+            const o   = Math.floor(degree / len);
+            return root + scaleNotes[d] + (octave + o) * 12;
+        };
+
+        const instruments = [
+            style.makeLead(rng),
+            style.makeBass(rng),
+            style.makePad(rng),
+            style.makePerc(rng),
+        ];
+
+        const genLead = chordRoot => {
+            const ch = [0, style.leadPan || 0];
+            let last = 0;
+            for (let i = 0; i < B; i++) {
+                const strongBeat = (i & 3) === 0;
+                const weakBeat   = (i & 3) === 2;
+                if (strongBeat || (weakBeat && rng() < style.leadWeakChance) || rng() < style.leadFreeChance) {
+                    const deg = strongBeat ? chordRoot + ri(style.leadStrongSpan) : chordRoot + ri(style.leadWeakSpan);
+                    const oct = rng() < style.leadHighOctaveChance ? 1 : 0;
+                    const n   = sn(deg, oct);
+                    ch.push(n !== last ? n : 0);
+                    last = n;
+                } else {
+                    ch.push(0);
+                }
             }
-        }
-        return ch;
+            return ch;
+        };
+
+        const genBass = chordRoot => {
+            const ch = [1, 0];
+            for (let i = 0; i < B; i++) {
+                if      ((i & 7) === 0)               ch.push(sn(chordRoot, -1));
+                else if ((i & 7) === 4 && rng()<style.bassAnswerChance)
+                                                     ch.push(sn(chordRoot + style.bassAnswerOffset, -1));
+                else if (rng() < style.bassWalkChance) ch.push(sn(chordRoot + style.bassWalkOffset, -1));
+                else                                   ch.push(0);
+            }
+            return ch;
+        };
+
+        const genPad = chordRoot => {
+            const ch = [2, rng()<.5 ? -style.padPan : style.padPan];
+            const chord = [sn(chordRoot), sn(chordRoot + 2), sn(chordRoot + 4)];
+            for (let i = 0; i < B; i++)
+                ch.push(i < style.padLength && rng() < style.padChance ? chord[i % chord.length] : 0);
+            return ch;
+        };
+
+        const genPerc = () => {
+            const ch = [3, 0];
+            for (let i = 0; i < B; i++) {
+                if      ((i & 7) === 0)               ch.push(style.percKick);
+                else if ((i & 7) === 4 && rng()<style.percAccentChance)
+                                                     ch.push(style.percAccent);
+                else if ((i & 3) === 2 && rng()<style.percTickChance)
+                                                     ch.push(style.percTick);
+                else                                   ch.push(0);
+            }
+            return ch;
+        };
+
+        const prog = style.progs[ri(style.progs.length)];
+        const patterns = prog.map(cr => [
+            genLead(cr),
+            genBass(cr),
+            genPad(cr),
+            genPerc(),
+        ]);
+        const sequence = [0, 1, 2, 3, 0, 1, 2, 3];
+
+        return [instruments, patterns, sequence, bpm];
     };
 
-    const genBass = chordRoot => {
-        const ch = [1, 0]; // inst=bass, pan=centre
-        for (let i = 0; i < B; i++) {
-            if      ((i & 3) === 0)              ch.push(sn(chordRoot, -1));           // root on beat
-            else if ((i & 3) === 2 && rng()<.6)  ch.push(sn(chordRoot + (rng()<.5?2:4), -1)); // fifth/third
-            else if (rng() < .08)                 ch.push(sn(chordRoot + ri(3), -1));  // walk
-            else                                  ch.push(0);
-        }
-        return ch;
-    };
-
-    const genPad = chordRoot => {
-        const ch = [2, rng()<.5?-.25:.25]; // inst=pad, slight panning for width
-        const arp = [0,2,4,2,1,3,2,1].map(d => sn(d + chordRoot));
-        for (let i = 0; i < B; i++)
-            ch.push(rng() < .55 ? arp[i % arp.length] : 0);
-        return ch;
-    };
-
-    const genPerc = () => {
-        const ch = [3, 0]; // inst=perc, pan=centre
-        for (let i = 0; i < B; i++) {
-            if      ((i & 3) === 0)              ch.push(10); // kick on 1
-            else if ((i & 3) === 2)              ch.push(16); // snare on 3
-            else if ((i & 1) === 1 && rng()<.6)  ch.push(22); // hi-hat off-beats
-            else                                  ch.push(0);
-        }
-        return ch;
-    };
-
-    // ── Chord progressions (scale degrees) ───────────────────────────────────
-    const progs = [
-        [0,3,4,3],   // I–IV–V–IV  (classic rock)
-        [0,5,3,4],   // I–VI–IV–V  (50s pop / hopeful)
-        [0,2,4,3],   // I–III–V–IV (heroic ascent)
-        [0,4,3,4],   // I–V–IV–V   (driving anthem)
-        [0,5,4,3],   // I–VI–V–IV  (descending tension)
+    const styles = [
+        {
+            name: 'gentle-sci-fi-exploration',
+            scales: [
+                [0,2,4,7,9],
+                [0,2,4,5,7,9,11],
+                [0,2,3,5,7,9,10],
+            ],
+            rootMin: 10,
+            rootRange: 5,
+            bpmMin: 68,
+            bpmSteps: 4,
+            bpmStep: 6,
+            leadPan: 0,
+            leadWeakChance: .42,
+            leadFreeChance: .08,
+            leadStrongSpan: 3,
+            leadWeakSpan: 5,
+            leadHighOctaveChance: .18,
+            bassAnswerChance: .8,
+            bassAnswerOffset: 4,
+            bassWalkChance: .03,
+            bassWalkOffset: 2,
+            padPan: .18,
+            padLength: 12,
+            padChance: .85,
+            percKick: 10,
+            percAccent: 16,
+            percTick: 22,
+            percAccentChance: .35,
+            percTickChance: .18,
+            progs: [
+                [0,3,4,3],
+                [0,4,3,2],
+                [0,2,3,2],
+                [0,3,2,4],
+            ],
+            makeLead: rng => [.28, 0, 220, .03, .16, .28, 0, 1, 0, 0, 0, 0, 0, 0, .08, 0, 0, .9, 0, rng() < .5 ? .08 : 0],
+            makeBass: ()=> [.35, 0, 110, .01, .14, .20, 0, 1, 0, 0, 0, 0, 0, 0,  0, 0, 0, .9, 0, 0],
+            makePad:  ()=> [.22, 0, 220, .08, .34, .38, 0, 1, 0, 0, 0, 0, 0, 0, .12, 0, 0, .8, 0, .06],
+            makePerc: ()=> [.12, 0, 120,  0,  0,   .05, 4, 1, -.2, 0, 0, 0, 0, .2,  0, 0, 0,  1, 0, 0],
+        },
+        {
+            name: 'lofi-chill',
+            scales: [
+                [0,2,4,7,9],
+                [0,2,3,5,7,9,10],
+                [0,3,5,7,10],
+            ],
+            rootMin: 8,
+            rootRange: 5,
+            bpmMin: 62,
+            bpmSteps: 4,
+            bpmStep: 5,
+            leadPan: -.05,
+            leadWeakChance: .30,
+            leadFreeChance: .05,
+            leadStrongSpan: 2,
+            leadWeakSpan: 4,
+            leadHighOctaveChance: .10,
+            bassAnswerChance: .65,
+            bassAnswerOffset: 2,
+            bassWalkChance: .02,
+            bassWalkOffset: 1,
+            padPan: .12,
+            padLength: 14,
+            padChance: .92,
+            percKick: 8,
+            percAccent: 14,
+            percTick: 20,
+            percAccentChance: .20,
+            percTickChance: .10,
+            progs: [
+                [0,2,3,2],
+                [0,3,2,1],
+                [0,2,4,2],
+                [0,1,3,2],
+            ],
+            makeLead: rng => [.20, 0, 180, .04, .20, .32, 0, 1, 0, 0, 0, 0, 0, 0, .04, 0, 0, .95, 0, rng() < .5 ? .05 : 0],
+            makeBass: ()=> [.28, 0, 95,  .02, .18, .24, 0, 1, 0, 0, 0, 0, 0, 0,  0, 0, 0, .95, 0, 0],
+            makePad:  ()=> [.18, 0, 190, .10, .40, .44, 0, 1, 0, 0, 0, 0, 0, 0, .08, 0, 0, .85, 0, .04],
+            makePerc: ()=> [.08, 0, 100,  0,  0,   .04, 4, 1, -.1, 0, 0, 0, 0, .12, 0, 0, 0,  1, 0, 0],
+        },
     ];
-    const prog = progs[ri(progs.length)];
 
-    // One ZzFXM pattern per chord
-    const patterns = prog.map(cr => [
-        genLead(cr),
-        genBass(cr),
-        genPad(cr),
-        genPerc(),
-    ]);
-
-    // Play the full progression twice = 8-bar loop
-    const sequence = [0, 1, 2, 3, 0, 1, 2, 3];
-
-    return [instruments, patterns, sequence, bpm];
+    if (!currentMusicStyle)
+        currentMusicStyle = styles[ri(styles.length)];
+    currentMusicStyleName = currentMusicStyle.name;
+    return buildTrack(currentMusicStyle);
 }
 
 // level settings
@@ -163,6 +234,8 @@ const resetGame=()=>
     levelEndTimer.unset();
     gameTimer.set(totalKills = level = 0);
     score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0;
+    currentMusicStyle = 0;
+    currentMusicStyleName = '';
     nextLevel(playerLives = 3);
 }
 
@@ -420,6 +493,7 @@ function generateLevel()
 {
     levelEndTimer.unset();
     levelScore = 0; levelKills = 0; levelStartTime = time;
+    liveEnemies = [];
 
     // remove all objects that are not persistnt or are descendants of something persitant
     for(const o of engineObjects)

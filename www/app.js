@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.52';
+const APP_VERSION = '1.0.54';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -504,14 +504,14 @@ engineInit(
 
     // check if any enemies left
     let enemiesCount = 0;
-    for (const o of engineCollideObjects)
+    for (const enemy of liveEnemies)
     {
-        if (o.isCharacter && o.team  == team_enemy)
-        {
-            ++enemiesCount;
-            const pos = vec2(mainCanvas.width/2 + (o.pos.x - cameraPos.x)*30,mainCanvas.height-20);
-            drawRectScreenSpace(pos, o.size.scale(20), o.color.scale(1,.6));
-        }
+        if (!enemy || enemy.destroyed || enemy.team != team_enemy || enemy.isDead())
+            continue;
+
+        ++enemiesCount;
+        const pos = vec2(mainCanvas.width/2 + (enemy.pos.x - cameraPos.x)*30,mainCanvas.height-20);
+        drawRectScreenSpace(pos, enemy.size.scale(20), enemy.color.scale(1,.6));
     }
 
     if (!enemiesCount && !levelEndTimer.isSet())
@@ -746,9 +746,10 @@ engineInit(
             hudText('Jeff Cechinel', cx, cy + 68, 26, '#fff', 'center');
             hudText('X: @Cechineljeff', cx, cy + 96, 20, '#8ef', 'center');
             hudText('Version ' + APP_VERSION, cx, cy + 126, 18, '#aaa', 'center');
+            hudText('Music: ' + (currentMusicStyleName || 'calm mix'), cx, cy + 148, 18, '#8aa', 'center');
 
             const pulse = .5 + .5 * Math.sin(Date.now() / 500);
-            hudText('Press OK to go back', cx, cy + 148, 18, `rgba(150,190,255,${pulse})`, 'center');
+            hudText('Press OK to go back', cx, cy + 170, 18, `rgba(150,190,255,${pulse})`, 'center');
         }
         else
         {
