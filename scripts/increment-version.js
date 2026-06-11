@@ -19,14 +19,14 @@ const newVersion = versionParts.join('.');
 packageJson.version = newVersion;
 writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
 
-// Update App.tsx if it exists
-const appTsxPath = join(rootDir, 'src', 'App.tsx');
+// Update the in-game About screen version constant in the root source file.
+const appJsPath = join(rootDir, 'app.js');
 try {
-  let appTsx = readFileSync(appTsxPath, 'utf8');
-  appTsx = appTsx.replace(/const APP_VERSION = '[^']+'/g, `const APP_VERSION = '${newVersion}'`);
-  writeFileSync(appTsxPath, appTsx);
+  let appJs = readFileSync(appJsPath, 'utf8');
+  appJs = appJs.replace(/const APP_VERSION = '[^']+'/g, `const APP_VERSION = '${newVersion}'`);
+  writeFileSync(appJsPath, appJs);
 } catch (err) {
-  console.log('⚠️  App.tsx not found or no version constant');
+  console.log('⚠️  app.js not found or no APP_VERSION constant');
 }
 
 // Update Android build.gradle (only after `npx cap add android` has run)

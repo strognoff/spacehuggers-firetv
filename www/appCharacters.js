@@ -424,7 +424,6 @@ class Enemy extends Character
             health *= 2;
             this.grenadeCount *= 10;
             this.maxVisionRange = 15;
-            --levelEnemyCount;
         }
 
         this.health = this.healthMax = health;
@@ -779,9 +778,9 @@ class Player extends Character
         }
 
         // movement control
-        this.moveInput.x = isUsingGamepad || this.playerIndex ? gamepadStick(0, this.playerIndex).x : keyIsDown(39) - keyIsDown(37);
+        this.moveInput.x = (isUsingGamepad || this.playerIndex) ? gamepadStick(0, this.playerIndex).x : keyIsDown(39) - keyIsDown(37);
 
-        this.moveInput.y = isUsingGamepad || this.playerIndex ? gamepadStick(0, this.playerIndex).y : keyIsDown(38) - keyIsDown(40);
+        this.moveInput.y = (isUsingGamepad || this.playerIndex) ? gamepadStick(0, this.playerIndex).y : keyIsDown(38) - keyIsDown(40);
         
         // jump
         this.holdingJump = (!this.playerIndex && keyIsDown(38)) || gamepadIsDown(0, this.playerIndex);
@@ -793,8 +792,14 @@ class Player extends Character
 
         // controls
         this.holdingShoot  = !this.playerIndex && (mouseIsDown(0) || keyIsDown(90)) || gamepadIsDown(2, this.playerIndex);
-        this.pressingThrow = !this.playerIndex && (mouseIsDown(2) || keyIsDown(67)) || gamepadIsDown(1, this.playerIndex);
-        this.pressedDodge  = !this.playerIndex && (mouseIsDown(1) || keyIsDown(88)) || gamepadIsDown(3, this.playerIndex);
+        // Fire TV Media Remote: Rewind (177→82) is the grenade key. The existing
+        // menu binding (R=82 -> resetGame at app.js:111) only fires when minDeadTime>3,
+        // so it doesn't conflict with combat in normal play.
+        this.pressingThrow = !this.playerIndex && (mouseIsDown(2) || keyIsDown(67) || keyIsDown(82)) || gamepadIsDown(1, this.playerIndex);
+        // Fire TV Media Remote: FastForward (176→78) is the roll key. The existing
+        // menu binding (N=78 -> nextLevel at app.js:101,118) only fires when the level
+        // is cleared, so it doesn't conflict with combat in normal play.
+        this.pressedDodge  = !this.playerIndex && (mouseIsDown(1) || keyIsDown(88) || keyIsDown(78)) || gamepadIsDown(3, this.playerIndex);
 
         // Fire TV remote: tap-fire on OK. The remote can't hold a key down,
         // so each OK press sets holdingShoot for one frame, producing one

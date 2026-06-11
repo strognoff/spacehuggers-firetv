@@ -34,20 +34,29 @@ const mouseWasReleased = keyWasReleased;
 // handle input events
 onkeydown   = e=>
 {
-    if (debug && e.target != document.body) return;
+    // Allow events targeting document (injected via evaluateJavascript from
+    // MainActivity) as well as the normal document.body target.
+    if (debug && e.target != document.body && e.target != document) return;
     // Fire TV Media Remote detection: any media key, Enter, or Backspace
     // marks the device as the remote. Real gamepads will reset this in
     // the gamepad polling loop.
+    // Keycodes 176-179 = JS media key range; 86/89/90/102 = raw Android
+    // KeyEvent codes injected by MainActivity via evaluateJavascript().
     const c = e.keyCode;
-    if (c==13 || c==27 || c==8 || (c>=176 && c<=179))
+    if (c==13 || c==27 || c==8 || (c>=176 && c<=179) || c==86 || c==89 || c==90 || c==102)
         isUsingFireTVRemote = 1;
     else
         isUsingFireTVRemote = 0;
+    // TEMP DEBUG: log every keydown so we can see what the WebView is
+    // actually receiving. If even arrow keys don't appear in adb logcat,
+    // the issue is the WebView layer, not the remap table.
+    // Remove this block once the media buttons are confirmed working.
+    console.log('[firetv-input] keyCode=' + c);
     e.repeat || (inputData[isUsingGamepad = 0][remapKeyCode(c)] = {d:hadInput=1, p:1});
 }
 onkeyup     = e=>
 {
-    if (debug && e.target != document.body) return;
+    if (debug && e.target != document.body && e.target != document) return;
     const c = remapKeyCode(e.keyCode); inputData[0][c] && (inputData[0][c].d = 0, inputData[0][c].r = 1);
 }
 onmousedown = e=> (inputData[0][e.button] = {d:hadInput=1, p:1}, onmousemove(e));
@@ -70,17 +79,20 @@ oncontextmenu = e=> !1; // prevent right click menu
 //   grenade) which is awkward on a TV remote. This version routes the
 //   media keys to navigation/pause; OK is consumed by the engine's tap-fire
 //   hook; Back is consumed and translated to Escape.
-//   MediaFastForward(176) -> N  (78)     next level
-//   MediaRewind    (177) -> R  (82)     restart run
-//   MediaStop      (178) -> Q  (81)     reserved / debug
-//   MediaPlayPause (179) -> 0  (consumed by togglePause keydown listener)
+//   MediaFastForward(176/90) -> N  (78)     next level
+//   MediaRewind    (177/89) -> R  (82)     restart run
+//   MediaStop      (178/86) -> Q  (81)     reserved / debug
+//   MediaPlayPause (179/102)-> 0  (consumed by togglePause keydown listener)
 //   Enter/OK       (13)  -> 91 ([)      consumed by tap-fire listener
 //   Backspace/Esc  (8/27)-> 27          consumed to prevent WebView back
+// (The 176-179 group is the original comment; the 86-102 group is the
+// actual Android keyevent space. Both are handled so this works regardless
+// of which one the WebView emits.)
 const remapFireTV = c=>
-    c==176 ? 78 :
-    c==177 ? 82 :
-    c==178 ? 81 :
-    c==179 ? 0  :
+    c==176 || c==90 ? 78 :
+    c==177 || c==89 ? 82 :
+    c==178 || c==86 ? 81 :
+    c==179 || c==102? 0  :
     c==13  ? 91 :
     c==8 || c==27 ? 27 : c;
 const remapKeyCode = c=> (c = remapFireTV(c), copyWASDToDpad ? c==87?38 : c==83?40 : c==65?37 : c==68?39 : c : c);

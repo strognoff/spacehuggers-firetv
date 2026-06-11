@@ -14,11 +14,21 @@ echo "🚀 Starting build and deploy process..."
 echo "📈 Incrementing version..."
 npm run version:increment
 
+# Mirror source -> www/ (Capacitor ships www/ into the APK, so source edits
+# not mirrored here would be invisible on the device).
+echo "🪞 Mirroring source -> www/..."
+npm run sync:source
+
+# Parse-check every JS file in www/ before packaging. Catches syntax errors
+# like unclosed braces that would crash the WebView at startup.
+echo "🧪 Parse-checking www/ JS files..."
+npm run parse:www
+
 # Build web assets
 echo "🏗️  Building web assets..."
 npm run build
 
-# Sync with Capacitor
+# Sync with Capacitor (copies www/ into android/app/src/main/assets/public/)
 echo "🔄 Syncing with Capacitor..."
 npx cap sync android
 

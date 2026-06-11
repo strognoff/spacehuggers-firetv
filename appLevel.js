@@ -143,6 +143,11 @@ let levelSize, level, levelSeed, levelEnemyCount, levelWarmup;
 let levelColor, levelBackgroundColor, levelSkyColor, levelSkyHorizonColor, levelGroundColor;
 let skyParticles, skyRain, skySoundTimer = new Timer;
 let gameTimer = new Timer, levelTimer = new Timer, levelEndTimer = new Timer;
+// Fire TV: set by nextLevel() if generateLevel() couldn't find a valid level
+// in 4 tries. Drained at the end of the next appUpdatePost() frame, giving
+// the GPU a chance to release the previous level's textures first.
+let pendingLevelGenerate = 0;
+let pendingNextLevelResume = 0;
 
 let tileBackground;
 const setTileBackgroundData = (pos, data=0)=>
@@ -158,7 +163,7 @@ const resetGame=()=>
     levelEndTimer.unset();
     gameTimer.set(totalKills = level = 0);
     score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0;
-    nextLevel(playerLives = 6);
+    nextLevel(playerLives = 3);
 }
 
 function buildTerrain(size)
@@ -282,7 +287,9 @@ function buildBase()
         const topFloor = floor == baseFloors;
         const groundFloor = !floor;
         const isCaveFloor = cave ? rand() < .8 | (floor == 0 && rand() < .6): 0;
-        let floorHeight = isCaveFloor ? randSeeded(9,2)|0 : topFloor? 0 : groundFloor? randSeeded(9,4)|0 : randSeeded(7,2)|0;
+        // Top floor must be at least 1 tile tall so the side walls actually render
+        // (the inner y-loop is `for(y=-1; y<floorHeight; ++y)`, which runs 0 times when floorHeight=0).
+        let floorHeight = isCaveFloor ? randSeeded(9,2)|0 : topFloor? 1 : groundFloor? randSeeded(9,4)|0 : randSeeded(7,2)|0;
         const floorSpace = topFloor ? 4 : max(floorHeight - 1, 0);
 
         let backWindow = rand() < .5;
@@ -290,8 +297,10 @@ function buildBase()
 
         for(let x=-floorWidth; x <= floorWidth; ++x)
         {
-            const isWindow = !isCaveFloor && randSeeded() < .3;
             const hasSide = !isCaveFloor && randSeeded() < .9;
+            // Wall-column windows: only set if this column will be a vertical wall
+            // (so non-edge columns can't become glass mid-floor).
+            const isWindow = !isCaveFloor && abs(x) == floorWidth && randSeeded() < .3;
 
             if (cave)
                 backWindow = 0;
@@ -307,8 +316,10 @@ function buildBase()
                 let foregroundTile = tileType_empty;
                 if (isCaveFloor)
                 {
-                    // add ceiling and floor
+                    // add ceiling, floor, and side walls
                     if ( y < 0 | y == floorHeight-1)
+                        foregroundTile = tileType_dirt;
+                    else if (abs(x) == floorWidth)
                         foregroundTile = tileType_dirt;
 
                     setTileBackgroundData(pos, tileType_dirt);
@@ -602,19 +613,38 @@ function applyArtToLevel()
 
 function nextLevel()
 {
-    score += levelScore;
-    playerLives += 4; // three for beating a level plus 1 for respawning
-    levelEnemyCount = 15 + min(level * 30, 300);
-    ++level;
-    levelSeed = randSeed = rand(1e9)|0;
-    levelSize = vec2(min(level*99,400),200);
-    levelColor = randColor(new Color(.2,.2,.2), new Color(.8,.8,.8));
-    levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
-    levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();
-    levelGroundColor = levelColor.mutate().add(new Color(.3,.3,.3)).clamp();
+    if (!pendingNextLevelResume)
+    {
+        score += levelScore;
+        if (level)
+            playerLives += 1; // gain 1 extra life for clearing a level after the first
+        levelEnemyCount = 15 + min(level * 30, 300);
+        ++level;
+        levelSeed = randSeed = rand(1e9)|0;
+        levelSize = vec2(min(level*99,400),200);
+        levelColor = randColor(new Color(.2,.2,.2), new Color(.8,.8,.8));
+        levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
+        levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();
+        levelGroundColor = levelColor.mutate().add(new Color(.3,.3,.3)).clamp();
+    }
+    else
+        pendingNextLevelResume = 0;
 
-    // keep trying until a valid level is generated
-    for(;generateLevel(););
+    // keep trying until a valid level is generated.
+    // Fire TV: cap retries per frame so the GPU gets a chance to release
+    // textures from the previous level before we allocate new ones. If we
+    // can't find a valid level in a few tries, yield a frame and retry.
+    // (Skia OOM happens when destroy + new level + new tile layers all
+    //  hit the GPU in a single frame.)
+    for (let levelTries = 0; generateLevel();)
+    {
+        if (++levelTries > 4) // 4 attempts per frame is plenty
+        {
+            pendingLevelGenerate = 1;
+            pendingNextLevelResume = 1;
+            return;
+        }
+    }
 
     // warm up level
     levelWarmup = 1;

@@ -57,6 +57,7 @@ const consumeTapFire = ()=> { const v = tapFireRequested; tapFireRequested = 0; 
 const togglePause    = ()=> { paused = !paused; if (paused) clearInput(); };
 let cameraPos=vec2(), cameraScale=4*max(defaultTileSize.x, defaultTileSize.y);
 let tileImageSize, tileImageSizeInverse, shrinkTilesX, shrinkTilesY, drawCount;
+let glContextLost = 0; // set when the WebGL context is lost, cleared on restore
 
 const tileImage = new Image(); // the tile image used by everything
 function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
@@ -75,6 +76,31 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         document.body.style = 'margin:0;overflow:hidden;background:#000';
         mainCanvas.style = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);image-rendering:crisp-edges;image-rendering:pixelated';          // pixelated rendering
         mainContext = mainCanvas.getContext('2d');
+
+        // Fire TV: handle WebGL context loss gracefully. The WebView's GPU
+        // process can run out of memory during heavy level transitions
+        // (Skia OOM → "context lost"). Without preventDefault the browser
+        // will never fire webglcontextrestored, so we must call it.
+        // We freeze the update loop while the context is lost, and
+        // re-upload the tile texture on restore.
+        mainCanvas.addEventListener('webglcontextlost', (e)=>
+        {
+            e.preventDefault();
+            glContextLost = 1;
+        }, false);
+        mainCanvas.addEventListener('webglcontextrestored', ()=>
+        {
+            glContextLost = 0;
+            // tile texture was lost; rebuild it
+            if (glEnable && glContext)
+                glTileTexture = glCreateTexture(tileImage);
+        }, false);
+
+        // TEMP DEBUG: confirms the engine JS is running on the device. If
+        // you don't see this in adb logcat, the WebView isn't executing
+        // www/app.js at all (different problem — likely APK stale or
+        // WebGL init failure). Remove once media keys are confirmed.
+        console.log('[firetv-boot] engine init, webGL=' + (glEnable ? 1 : 0));
 
         debugInit();
         // Fire TV: WebGL GPU-process crashes on some devices. If glInit
@@ -133,6 +159,15 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
             frameTimeDeltaMS *= keyIsDown(107) ? 5 : keyIsDown(109) ? .2 : 1;
         if (!paused)
             frameTimeBufferMS += frameTimeDeltaMS;
+
+        // skip the game update while WebGL context is lost so we don't
+        // keep allocating textures the GPU can't accept.
+        if (glContextLost)
+        {
+            mainContext.fillStyle = '#000';
+            mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+            return;
+        }
 
         // update frame
         mousePosWorld = screenToWorld(mousePosScreen);

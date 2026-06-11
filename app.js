@@ -16,12 +16,234 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
+const APP_VERSION = '1.0.52';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
 let cameraShake = 0;
 let pauseMenuOption  = 0;     // 0=Resume 1=Music 2=Restart 3=About
 let pauseAboutScreen = false; // shows about overlay within pause
+
+// ── High score / scoreboard state ────────────────────────────────────────────
+// Persisted top-10 list. Stored as JSON in localStorage under one key. The
+// WebView can clear localStorage under memory pressure, so this is best-effort
+// — the scoreboard degrades gracefully to empty if storage is wiped.
+const HS_KEY = 'spacehuggers.highscores';
+const HS_MAX = 10;
+let pauseScoreboardScreen = false; // sub-screen flag (mirrors pauseAboutScreen)
+let nameEntryActive = false;      // on-screen keyboard open after qualifying run
+let nameEntryBuffer = '';         // 1..3 chars typed so far
+let nameEntryRow = 0, nameEntryCol = 0; // cursor on the keyboard grid
+let nameEntryFinalScore = 0;      // score being recorded (for prompt text)
+let nameEntryFinalLevel = 0;      // level reached (for prompt text)
+
+const loadHighScores = ()=>
+{
+    try
+    {
+        const raw = localStorage.getItem(HS_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    }
+    catch (e) { return []; }
+};
+
+const saveHighScores = (list)=>
+{
+    try { localStorage.setItem(HS_KEY, JSON.stringify(list)); }
+    catch (e) { /* storage full or denied — best-effort */ }
+};
+
+// Returns true if the score qualifies for the top 10. The list passed in is
+// the *current* list; a new score always qualifies if the list is shorter
+// than HS_MAX, or if it beats the lowest entry.
+const qualifiesForHighScore = (score, list)=>
+    list.length < HS_MAX || (list.length && score > list[list.length-1].score);
+
+const addHighScore = (name, score, level)=>
+{
+    const list = loadHighScores();
+    list.push({ name: name || 'AAA', score: score|0, level: level|0, date: Date.now() });
+    list.sort((a,b)=> b.score - a.score);
+    saveHighScores(list.slice(0, HS_MAX));
+};
+
+// ── On-screen keyboard for name entry ────────────────────────────────────────
+// 3 rows × 10 columns. Row 2 last cell is BACKSPACE.
+// Using a flat layout (D-pad navigates row-major) keeps the input code simple.
+const KBD_ROWS = 3, KBD_COLS = 10;
+const KBD_ROW0 = ['A','B','C','D','E','F','G','H','I','J'];
+const KBD_ROW1 = ['K','L','M','N','O','P','Q','R','S','T'];
+const KBD_ROW2 = ['U','V','W','X','Y','Z','7','8','9','\u232B']; // last = backspace
+
+// Look up the key under (row, col). Returns null if out of range.
+const kbdKey = (r, c)=>
+{
+    if (c < 0 || c >= KBD_COLS) return null;
+    if (r === 0) return KBD_ROW0[c];
+    if (r === 1) return KBD_ROW1[c];
+    if (r === 2) return KBD_ROW2[c];
+    return null;
+};
+
+// Handle D-pad / OK input while nameEntryActive is true. Should be called
+// once per frame from the update path. Consumes input via clearInput().
+const updateNameEntry = ()=>
+{
+    if (keyWasPressed(38) || gamepadWasPressed(12)) // Up
+    {
+        nameEntryRow = (nameEntryRow - 1 + KBD_ROWS) % KBD_ROWS;
+        clearInput();
+    }
+    else if (keyWasPressed(40) || gamepadWasPressed(13)) // Down
+    {
+        nameEntryRow = (nameEntryRow + 1) % KBD_ROWS;
+        clearInput();
+    }
+    else if (keyWasPressed(37) || gamepadWasPressed(14)) // Left
+    {
+        nameEntryCol = (nameEntryCol - 1 + KBD_COLS) % KBD_COLS;
+        clearInput();
+    }
+    else if (keyWasPressed(39) || gamepadWasPressed(15)) // Right
+    {
+        nameEntryCol = (nameEntryCol + 1) % KBD_COLS;
+        clearInput();
+    }
+    else if (keyWasPressed(8) || keyWasPressed(46)) // Backspace / Delete
+    {
+        nameEntryBuffer = nameEntryBuffer.slice(0, -1);
+        clearInput();
+    }
+    else if (keyWasPressed(13) || keyWasPressed(90) || keyWasPressed(32) ||
+             keyWasPressed(91) || gamepadWasPressed(0))  // OK
+    {
+        const key = kbdKey(nameEntryRow, nameEntryCol);
+        if (key === '\u232B')
+        {
+            // Backspace
+            nameEntryBuffer = nameEntryBuffer.slice(0, -1);
+        }
+        else if (key && nameEntryBuffer.length < 3)
+        {
+            nameEntryBuffer += key;
+        }
+        // Once buffer is full (3 chars), OK anywhere confirms.
+        if (nameEntryBuffer.length >= 3)
+        {
+            addHighScore(nameEntryBuffer, nameEntryFinalScore, nameEntryFinalLevel);
+            nameEntryActive = false;
+            nameEntryBuffer = '';
+            resetGame();
+        }
+        clearInput();
+    }
+};
+
+// ── HUD helpers (module-scope so drawNameEntry and appRenderPost can both use them) ──
+const hudPill = (x, y, w, h, alpha=0.55) => {
+    mainContext.save();
+    mainContext.fillStyle = `rgba(0,0,0,${alpha})`;
+    mainContext.beginPath();
+    mainContext.roundRect(x, y, w, h, h/2);
+    mainContext.fill();
+    mainContext.restore();
+};
+const hudText = (txt, x, y, size, color='#fff', align='left') => {
+    mainContext.save();
+    mainContext.font = `bold ${size}px impact`;
+    mainContext.textAlign = align;
+    mainContext.textBaseline = 'middle';
+    mainContext.fillStyle = color;
+    mainContext.shadowColor = 'rgba(0,0,0,0.8)';
+    mainContext.shadowBlur = 4;
+    mainContext.fillText(txt, x, y);
+    mainContext.restore();
+};
+
+// Render the name-entry overlay. Replaces the GAME OVER panel while active.
+const drawNameEntry = ()=>
+{
+    const cw = mainCanvas.width, ch = mainCanvas.height;
+    const cx = cw/2, cy = ch/2;
+    // dim
+    mainContext.fillStyle = 'rgba(0,0,0,.78)';
+    mainContext.fillRect(0, 0, cw, ch);
+    // panel
+    mainContext.save();
+    mainContext.fillStyle = 'rgba(10,10,30,0.95)';
+    mainContext.beginPath();
+    mainContext.roundRect(cx - 320, cy - 230, 640, 460, 20);
+    mainContext.fill();
+    mainContext.strokeStyle = '#665';
+    mainContext.lineWidth = 2;
+    mainContext.stroke();
+    mainContext.restore();
+
+    hudText('NEW HIGH SCORE!', cx, cy - 195, 32, '#ffe066', 'center');
+    hudText('Score: ' + nameEntryFinalScore + '   \u00B7   Level ' + nameEntryFinalLevel,
+            cx, cy - 155, 18, '#aaa', 'center');
+
+    // buffer display — three slots, fills with typed chars
+    const slotW = 60, slotH = 70, slotGap = 12;
+    const slotsTotalW = slotW * 3 + slotGap * 2;
+    const slotY = cy - 110;
+    const slotX0 = cx - slotsTotalW/2;
+    for (let i = 0; i < 3; i++)
+    {
+        const sx = slotX0 + i * (slotW + slotGap);
+        mainContext.save();
+        mainContext.fillStyle = 'rgba(255,255,255,0.05)';
+        mainContext.beginPath();
+        mainContext.roundRect(sx, slotY, slotW, slotH, 8);
+        mainContext.fill();
+        mainContext.strokeStyle = '#556';
+        mainContext.lineWidth = 1;
+        mainContext.stroke();
+        mainContext.restore();
+        const ch = nameEntryBuffer[i];
+        if (ch) hudText(ch, sx + slotW/2, slotY + slotH/2, 44, '#ffe066', 'center');
+    }
+    // typing hint
+    const hint = nameEntryBuffer.length === 0
+        ? 'Pick letters to enter your name'
+        : (nameEntryBuffer.length < 3 ? (3 - nameEntryBuffer.length) + ' more letter' + (3 - nameEntryBuffer.length === 1 ? '' : 's') + ' (or OK to confirm \"' + nameEntryBuffer + '\")'
+                                     : 'Press OK to save');
+    hudText(hint, cx, cy - 18, 16, '#8ef', 'center');
+
+    // keyboard grid
+    const keyW = 48, keyH = 48, keyGap = 8;
+    const gridW = keyW * KBD_COLS + keyGap * (KBD_COLS - 1);
+    const gridX0 = cx - gridW/2;
+    const gridY = cy + 18;
+    for (let r = 0; r < KBD_ROWS; r++)
+    {
+        for (let c = 0; c < KBD_COLS; c++)
+        {
+            const kx = gridX0 + c * (keyW + keyGap);
+            const ky = gridY + r * (keyH + keyGap);
+            const sel = (r === nameEntryRow && c === nameEntryCol);
+            const label = kbdKey(r, c);
+            mainContext.save();
+            mainContext.fillStyle = sel ? 'rgba(255,224,102,0.25)' : 'rgba(255,255,255,0.06)';
+            mainContext.beginPath();
+            mainContext.roundRect(kx, ky, keyW, keyH, 8);
+            mainContext.fill();
+            mainContext.strokeStyle = sel ? '#ffe066' : '#445';
+            mainContext.lineWidth = sel ? 2 : 1;
+            mainContext.stroke();
+            mainContext.restore();
+            // use a smaller font for BKSP so the glyph fits
+            const isBksp = label === '\u232B';
+            hudText(label || '', kx + keyW/2, ky + keyH/2, isBksp ? 24 : 28,
+                    sel ? '#ffe066' : '#ddd', 'center');
+        }
+    }
+
+    hudText('D-Pad Navigate   OK Select   \u232B Backspace   (3 letters max)',
+            cx, cy + 200, 14, 'rgba(140,140,170,0.8)', 'center');
+};
 
 engineInit(
 
@@ -35,6 +257,14 @@ engineInit(
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appUpdate
 {
+    // If the on-screen name-entry keyboard is up, it owns all input until the
+    // name is confirmed. Run it first so it can clearInput() and prevent the
+    // restart trigger / player movement from also firing this frame. We still
+    // let the rest of the update run (camera/window sizes, world tick) so the
+    // background keeps rendering behind the keyboard overlay.
+    if (nameEntryActive)
+        updateNameEntry();
+
     const cameraSize = vec2(mainCanvas.width, mainCanvas.height).scale(1/cameraScale);
     renderWindowSize = cameraSize.add(vec2(5));
 
@@ -108,21 +338,60 @@ engineInit(
 
     // Fire TV: also accept OK (raw 13) and the tap-fire mapped key (91)
     // as restart triggers, since on the remote the user has no Z/Space/GpadA.
-    if (minDeadTime > 3 && (keyWasPressed(90) || keyWasPressed(32) || keyWasPressed(13) || keyWasPressed(91) || gamepadWasPressed(0)) || keyWasPressed(82))
-        resetGame();
+    // Skip the restart while the name-entry keyboard is up — it owns OK input.
+    if (!nameEntryActive && minDeadTime > 3 && (keyWasPressed(90) || keyWasPressed(32) || keyWasPressed(13) || keyWasPressed(91) || gamepadWasPressed(0)) || keyWasPressed(82))
+    {
+        // If the run's score qualifies for the top 10, intercept the reset
+        // and route the player through the on-screen name-entry keyboard
+        // instead. Confirming the name then proceeds to reset.
+        const finalScore = score + levelScore;
+        if (qualifiesForHighScore(finalScore, loadHighScores()))
+        {
+            nameEntryActive   = true;
+            nameEntryBuffer   = '';
+            nameEntryRow      = 0;
+            nameEntryCol      = 0;
+            nameEntryFinalScore = finalScore;
+            nameEntryFinalLevel = level;
+        }
+        else
+        {
+            resetGame();
+        }
+    }
 
     // advance to next level only on explicit OK/confirm press
     if (levelEndTimer.isSet() && !paused && !(minDeadTime > 3 && playerLives <= 0))
     {
         if (keyWasPressed(13) || keyWasPressed(90) || keyWasPressed(32) || keyWasPressed(91) ||
             keyWasPressed(78) || gamepadWasPressed(0))
+        {
             nextLevel();
+            clearInput();
+        }
     }
 },
 
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appUpdatePost
 {
+    // Fire TV: continue trying to generate a valid level. nextLevel() sets
+    // pendingLevelGenerate when it couldn't find one in a few tries — we
+    // resume here on the next frame, after the GPU has had a chance to
+    // release the previous level's textures. Bail after 20 frames so we
+    // don't get stuck.
+    if (pendingLevelGenerate)
+    {
+        if (++pendingLevelGenerate > 20)
+            pendingLevelGenerate = 0;
+        else
+        {
+            pendingLevelGenerate = 0;
+            nextLevel();
+            return;
+        }
+    }
+
     if (players.length == 1)
     {
         const player = players[0];
@@ -211,7 +480,7 @@ engineInit(
         mainContext.textBaseline = 'top';
         mainContext.fillStyle = '#fff';
         const label = isUsingFireTVRemote
-            ? 'D-Pad Move  OK Shoot   \u275A\u275A Pause   \u23EA Restart   \u23E9 Next'
+            ? 'D-Pad Move  OK Shoot   \u275A\u275A Pause   \u23EA Grenade   \u23E9 Roll   (hold 3s after death to restart, press at level end to skip)'
             : isUsingGamepad
                 ? '[A] Shoot    [B] Roll    [X] Grenade    [Y] Thrust    D-Pad Move'
                 : '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move';
@@ -248,26 +517,7 @@ engineInit(
     if (!enemiesCount && !levelEndTimer.isSet())
         levelEndTimer.set();
 
-    // ── HUD helpers ───────────────────────────────────────────────────────────
-    const hudPill = (x, y, w, h, alpha=0.55) => {
-        mainContext.save();
-        mainContext.fillStyle = `rgba(0,0,0,${alpha})`;
-        mainContext.beginPath();
-        mainContext.roundRect(x, y, w, h, h/2);
-        mainContext.fill();
-        mainContext.restore();
-    };
-    const hudText = (txt, x, y, size, color='#fff', align='left') => {
-        mainContext.save();
-        mainContext.font = `bold ${size}px impact`;
-        mainContext.textAlign = align;
-        mainContext.textBaseline = 'middle';
-        mainContext.fillStyle = color;
-        mainContext.shadowColor = 'rgba(0,0,0,0.8)';
-        mainContext.shadowBlur = 4;
-        mainContext.fillText(txt, x, y);
-        mainContext.restore();
-    };
+    // hudPill / hudText are defined at module scope (above drawNameEntry)
 
     const pad = 14, pillH = 40, cw = mainCanvas.width, ch = mainCanvas.height;
     const totalScore = score + levelScore;
@@ -330,18 +580,18 @@ engineInit(
     // ── Pause menu ────────────────────────────────────────────────────────────
     if (paused)
     {
-        const MENU_ITEMS = 4;
+        const MENU_ITEMS = 5;
         // IMPORTANT: clearInput() after every action — when paused the engine
         // never clears keyWasPressed flags so without it actions fire every frame.
         if (keyWasPressed(38) || gamepadWasPressed(12))
         {
-            if (pauseAboutScreen) { pauseAboutScreen = false; }
+            if (pauseAboutScreen || pauseScoreboardScreen) { pauseAboutScreen = pauseScoreboardScreen = false; }
             else { pauseMenuOption = (pauseMenuOption - 1 + MENU_ITEMS) % MENU_ITEMS; }
             clearInput();
         }
         else if (keyWasPressed(40) || gamepadWasPressed(13))
         {
-            if (!pauseAboutScreen)
+            if (!pauseAboutScreen && !pauseScoreboardScreen)
                 pauseMenuOption = (pauseMenuOption + 1) % MENU_ITEMS;
             clearInput();
         }
@@ -351,9 +601,13 @@ engineInit(
             {
                 pauseAboutScreen = false; // back from about
             }
+            else if (pauseScoreboardScreen)
+            {
+                pauseScoreboardScreen = false; // back from scoreboard
+            }
             else if (pauseMenuOption === 0)
             {
-                pauseAboutScreen = false;
+                pauseAboutScreen = pauseScoreboardScreen = false;
                 togglePause(); // resume
             }
             else if (pauseMenuOption === 1)
@@ -362,12 +616,18 @@ engineInit(
             }
             else if (pauseMenuOption === 2)
             {
-                pauseAboutScreen = false;
+                pauseAboutScreen = pauseScoreboardScreen = false;
                 togglePause();
                 resetGame(); // restart
             }
             else if (pauseMenuOption === 3)
             {
+                pauseAboutScreen = pauseScoreboardScreen = false;
+                pauseScoreboardScreen = true; // open scoreboard
+            }
+            else if (pauseMenuOption === 4)
+            {
+                pauseAboutScreen = false;
                 pauseAboutScreen = true; // open about
             }
             clearInput();
@@ -379,7 +639,72 @@ engineInit(
         mainContext.fillStyle = 'rgba(0,0,0,0.75)';
         mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
 
-        if (pauseAboutScreen)
+        if (pauseScoreboardScreen)
+        {
+            // ── Scoreboard sub-screen ─────────────────────────────────────────
+            mainContext.save();
+            mainContext.fillStyle = 'rgba(5,5,20,0.95)';
+            mainContext.beginPath();
+            mainContext.roundRect(cx - 300, cy - 240, 600, 480, 20);
+            mainContext.fill();
+            mainContext.strokeStyle = '#665';
+            mainContext.lineWidth = 2;
+            mainContext.stroke();
+            mainContext.restore();
+
+            hudText('HIGH SCORES', cx, cy - 200, 36, '#ffe066', 'center');
+            // gold divider
+            mainContext.save();
+            mainContext.strokeStyle = '#553';
+            mainContext.lineWidth = 1;
+            mainContext.beginPath();
+            mainContext.moveTo(cx - 240, cy - 165);
+            mainContext.lineTo(cx + 240, cy - 165);
+            mainContext.stroke();
+            mainContext.restore();
+
+            const list = loadHighScores();
+            if (list.length === 0)
+            {
+                hudText('No scores yet \u2014 beat a level to get on the board!', cx, cy + 10, 18, '#aaa', 'center');
+            }
+            else
+            {
+                // Column headers
+                hudText('#',     cx - 240, cy - 130, 16, '#888', 'left');
+                hudText('NAME',  cx - 200, cy - 130, 16, '#888', 'left');
+                hudText('SCORE', cx +  60, cy - 130, 16, '#888', 'right');
+                hudText('LEVEL', cx + 180, cy - 130, 16, '#888', 'right');
+                // Up to HS_MAX rows
+                const rowH = 32;
+                const startY = cy - 100;
+                for (let i = 0; i < list.length; i++)
+                {
+                    const entry = list[i];
+                    const ry = startY + i * rowH;
+                    const rank = (i + 1).toString().padStart(2, '0');
+                    const rowColor = i === 0 ? '#ffe066' : (i < 3 ? '#fff' : '#ccc');
+                    if (i === 0)
+                    {
+                        // Highlight #1 with a subtle band
+                        mainContext.save();
+                        mainContext.fillStyle = 'rgba(255,224,102,0.10)';
+                        mainContext.beginPath();
+                        mainContext.roundRect(cx - 260, ry - 14, 520, rowH - 4, 6);
+                        mainContext.fill();
+                        mainContext.restore();
+                    }
+                    hudText(rank,                  cx - 240, ry, 22, rowColor, 'left');
+                    hudText(entry.name,            cx - 200, ry, 24, rowColor, 'left');
+                    hudText(entry.score,           cx +  60, ry, 22, rowColor, 'right');
+                    hudText('Lv ' + entry.level,   cx + 180, ry, 20, rowColor, 'right');
+                }
+            }
+
+            const pulse = .5 + .5 * Math.sin(Date.now() / 500);
+            hudText('Press OK to go back', cx, cy + 200, 18, `rgba(150,190,255,${pulse})`, 'center');
+        }
+        else if (pauseAboutScreen)
         {
             // ── About sub-screen ──────────────────────────────────────────────
             mainContext.save();
@@ -420,6 +745,7 @@ engineInit(
             hudText('Add-ons & Fire TV port', cx, cy + 40, 18, '#aaa', 'center');
             hudText('Jeff Cechinel', cx, cy + 68, 26, '#fff', 'center');
             hudText('X: @Cechineljeff', cx, cy + 96, 20, '#8ef', 'center');
+            hudText('Version ' + APP_VERSION, cx, cy + 126, 18, '#aaa', 'center');
 
             const pulse = .5 + .5 * Math.sin(Date.now() / 500);
             hudText('Press OK to go back', cx, cy + 148, 18, `rgba(150,190,255,${pulse})`, 'center');
@@ -453,24 +779,25 @@ engineInit(
                 { label: '\u25B6  Resume',                                        color: '#fff'  },
                 { label: (musicMuted ? '\uD83D\uDD07  Music: OFF' : '\uD83D\uDD0A  Music: ON'), color: musicMuted ? '#f88' : '#8f8' },
                 { label: '\u21BA  Restart Game',                                  color: '#faa'  },
+                { label: '\uD83C\uDFC6  Scoreboard',                              color: '#fc6'  },
                 { label: '\u2139\uFE0F  About',                                   color: '#adf'  },
             ];
             items.forEach((item, idx) => {
-                const iy  = cy - 78 + idx * 68;
+                const iy  = cy - 100 + idx * 58;
                 const sel = pauseMenuOption === idx;
                 if (sel) {
                     mainContext.save();
                     mainContext.fillStyle = 'rgba(255,255,255,0.10)';
                     mainContext.beginPath();
-                    mainContext.roundRect(cx - 220, iy - 24, 440, 48, 10);
+                    mainContext.roundRect(cx - 220, iy - 22, 440, 44, 10);
                     mainContext.fill();
                     mainContext.restore();
                 }
-                hudText((sel ? '\u203A ' : '  ') + item.label, cx, iy, 28,
+                hudText((sel ? '\u203A ' : '  ') + item.label, cx, iy, 26,
                         sel ? '#ffe066' : item.color, 'center');
             });
 
-            hudText('\u2191\u2193 Navigate   OK Confirm', cx, cy + 185, 18, 'rgba(140,140,170,0.8)', 'center');
+            hudText('\u2191\u2193 Navigate   OK Confirm', cx, cy + 188, 18, 'rgba(140,140,170,0.8)', 'center');
         }
     }
 
@@ -494,6 +821,12 @@ engineInit(
         mainContext.fillText('(Keyboard: Z, Space, or R  \u00B7  Gamepad: A)', mainCanvas.width/2, mainCanvas.height/2 + 90);
         mainContext.textBaseline = 'top';
     }
+
+    // On-screen name-entry keyboard (active after a qualifying game-over run).
+    // Drawn last so it covers everything — same modal-priority pattern as
+    // the GAME OVER overlay above.
+    if (nameEntryActive)
+        drawNameEntry();
 });
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -512,8 +845,17 @@ document.addEventListener('visibilitychange', () =>
         if (typeof paused !== 'undefined' && !paused)
         {
             togglePause();
-            pauseMenuOption  = 0;
-            pauseAboutScreen = false;
+            pauseMenuOption     = 0;
+            pauseAboutScreen    = false;
+            pauseScoreboardScreen = false;
+            // Cancel any pending name entry so the user doesn't return to a
+            // frozen keyboard. The score is lost on dismissal — acceptable
+            // because the user explicitly backgrounded the app.
+            if (nameEntryActive)
+            {
+                nameEntryActive = false;
+                nameEntryBuffer = '';
+            }
         }
     }
     else

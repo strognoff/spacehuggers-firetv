@@ -107,8 +107,8 @@ This fork packages the game as an Android app via [Capacitor](https://capacitorj
   - D-pad → move/jump (existing WASD arrow-key passthrough)
   - OK (Enter) → tap-fire one bullet per press
   - Play/Pause → toggle pause overlay
-  - Rewind → restart current run
-  - FastForward → next level
+  - Rewind → throw grenade (also restarts a dead run after 3s)
+  - FastForward → roll (also advances to the next level when one is cleared)
   - Back → consumed (does not exit the app)
 - **Pause overlay** drawn in `app/app.js` `appRenderPost` — dim backdrop, "PAUSED" big text, resume instruction.
 - **Visibility-pause hook** — the game auto-pauses when the WebView is backgrounded and resumes on foreground.

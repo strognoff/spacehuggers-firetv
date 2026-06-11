@@ -34,12 +34,16 @@ const mouseWasReleased = keyWasReleased;
 // handle input events
 onkeydown   = e=>
 {
-    if (debug && e.target != document.body) return;
+    // Allow events targeting document (injected via evaluateJavascript from
+    // MainActivity) as well as the normal document.body target.
+    if (debug && e.target != document.body && e.target != document) return;
     // Fire TV Media Remote detection: any media key, Enter, or Backspace
     // marks the device as the remote. Real gamepads will reset this in
     // the gamepad polling loop.
+    // Keycodes 176-179 = JS media key range; 86/89/90/102 = raw Android
+    // KeyEvent codes injected by MainActivity via evaluateJavascript().
     const c = e.keyCode;
-    if (c==13 || c==27 || c==8 || (c>=176 && c<=179))
+    if (c==13 || c==27 || c==8 || (c>=176 && c<=179) || c==86 || c==89 || c==90 || c==102)
         isUsingFireTVRemote = 1;
     else
         isUsingFireTVRemote = 0;
@@ -47,7 +51,7 @@ onkeydown   = e=>
 }
 onkeyup     = e=>
 {
-    if (debug && e.target != document.body) return;
+    if (debug && e.target != document.body && e.target != document) return;
     const c = remapKeyCode(e.keyCode); inputData[0][c] && (inputData[0][c].d = 0, inputData[0][c].r = 1);
 }
 onmousedown = e=> (inputData[0][e.button] = {d:hadInput=1, p:1}, onmousemove(e));

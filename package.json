@@ -1,13 +1,16 @@
 {
   "name": "spacehuggers-firetv",
-  "version": "1.0.34",
+  "version": "1.0.52",
   "description": "Space Huggers - Fire TV port via Capacitor",
   "private": true,
   "type": "module",
   "scripts": {
     "sync": "cap sync",
+    "sync:source": "bash scripts/sync-www.sh",
+    "check:www": "bash scripts/sync-www.sh --check",
+    "parse:www": "node scripts/parse-www.js",
     "open:android": "cap open android",
-    "build:android": "cap sync && cd android && ./gradlew assembleDebug",
+    "build:android": "npm run check:www && npm run parse:www && npm run sync:source && cap sync && cd android && ./gradlew assembleDebug",
     "prereqs": "bash scripts/check-prereqs.sh",
     "version:increment": "node scripts/increment-version.js",
     "build": "echo \"No bundler step required - assets are already in www/\" && node -e \"const fs=require('fs');for(const f of ['www/index.html','www/tiles.png','www/app.js','www/engine/engine.js']){try{fs.accessSync(f)}catch(e){console.error('Missing '+f);process.exit(1)}}console.log('www/ assets present')\"",
