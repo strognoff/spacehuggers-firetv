@@ -802,7 +802,7 @@ function nextLevel()
             levelSize.x = min(levelSize.x, 100);
             levelSize.y = min(levelSize.y, 100);
         }
-        levelColor = randColor(new Color(.2,.2,.2), new Color(.8,.8,.8));
+        levelColor = randColor(new Color(.2,.2,.2), new Color(.4,.4,.4));
         levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
         _skyGradient = null; // invalidate cached sky gradient (rebuilt in appRender)
         levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();
