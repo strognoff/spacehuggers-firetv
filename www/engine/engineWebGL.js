@@ -35,7 +35,9 @@ let glEnable = (()=>
 // when the WebView's GPU process crashes on Fire TV devices).
 const glDisable = ()=> { glEnable = 0; };
 let glCanvas, glContext, glTileTexture, glShader, glPositionData, glColorData, 
-    glBatchCount, glDirty, glAdditive, glShrinkTilesX, glShrinkTilesY, glOverlay;
+    glBatchCount, glDirty, glAdditive, glShrinkTilesX, glShrinkTilesY, glOverlay,
+    glMatrixUniform, glMatrixBuffer;
+let _currentBlendMode = -1; // tracks active blend mode to skip redundant glFlush calls
 
 function glInit()
 {
@@ -139,11 +141,19 @@ function glInit()
     // use point filtering for pixelated rendering
     glContext.texParameteri(gl_TEXTURE_2D, gl_TEXTURE_MIN_FILTER, pixelated ? gl_NEAREST : gl_LINEAR);
     glContext.texParameteri(gl_TEXTURE_2D, gl_TEXTURE_MAG_FILTER, pixelated ? gl_NEAREST : gl_LINEAR);
+
+    // cache the matrix uniform location and pre-allocate the buffer (Fix 4)
+    glMatrixUniform = glContext.getUniformLocation(glShader, 'm');
+    glMatrixBuffer  = new Float32Array(16);
 }
 
 function glSetBlendMode(additive)
 {
     if (!glEnable) return;
+
+    // skip redundant flush+state changes when blend mode hasn't changed (Fix 9)
+    if (additive === _currentBlendMode) return;
+    _currentBlendMode = additive;
         
     if (additive != glAdditive)
         glFlush();
@@ -222,19 +232,22 @@ function glPreRender(width, height)
 
     // set up the shader
     glContext.useProgram(glShader);
+    _currentBlendMode = -1; // reset so the first glSetBlendMode() call of this frame always applies
     glSetBlendMode();
 
-    // build the transform matrix
+    // build the transform matrix using the cached buffer (no new Float32Array allocation)
     const sx = 2 * cameraScale / width;
     const sy = 2 * cameraScale / height;
-    glContext.uniformMatrix4fv(glContext.getUniformLocation(glShader, 'm'), 0,
-        new Float32Array([
-            sx, 0, 0, 0,
-            0, sy, 0, 0,
-            1, 1, -1, 1,
-            -1-sx*cameraPos.x, -1-sy*cameraPos.y, 0, 0
-        ])
-    );
+    glMatrixBuffer.fill(0);
+    glMatrixBuffer[0]  = sx;
+    glMatrixBuffer[5]  = sy;
+    glMatrixBuffer[8]  = 1;
+    glMatrixBuffer[9]  = 1;
+    glMatrixBuffer[10] = -1;
+    glMatrixBuffer[11] = 1;
+    glMatrixBuffer[12] = -1 - sx * cameraPos.x;
+    glMatrixBuffer[13] = -1 - sy * cameraPos.y;
+    glContext.uniformMatrix4fv(glMatrixUniform, 0, glMatrixBuffer);
 }
 
 function glFlush()

@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.65';
+const APP_VERSION = '1.0.72';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -138,6 +138,7 @@ const updateNameEntry = ()=>
         if (wasAlreadyFull && nameEntryBuffer.length >= 3)
         {
             addHighScore(nameEntryBuffer, nameEntryFinalScore, nameEntryFinalLevel);
+            _cachedHighScores = null; // force cache refresh next time scoreboard opens
             nameEntryActive = false;
             nameEntryBuffer = '';
             resetGame();
@@ -156,46 +157,66 @@ const hudPill = (x, y, w, h, alpha=0.55) => {
     mainContext.restore();
 };
 const hudText = (txt, x, y, size, color='#fff', align='left') => {
-    mainContext.save();
-    mainContext.font = `bold ${size}px impact`;
-    mainContext.textAlign = align;
-    mainContext.textBaseline = 'middle';
-    mainContext.fillStyle = color;
-    mainContext.shadowColor = 'rgba(0,0,0,0.8)';
-    mainContext.shadowBlur = 4;
+    const _pf = mainContext.fillStyle, _pa = mainContext.textAlign,
+          _pb = mainContext.textBaseline, _pfo = mainContext.font,
+          _psc = mainContext.shadowColor, _psb = mainContext.shadowBlur;
+    mainContext.font          = `bold ${size}px impact`;
+    mainContext.textAlign     = align;
+    mainContext.textBaseline  = 'middle';
+    mainContext.fillStyle     = color;
+    mainContext.shadowColor   = 'rgba(0,0,0,0.8)';
+    mainContext.shadowBlur    = 4;
     mainContext.fillText(txt, x, y);
-    mainContext.restore();
+    mainContext.fillStyle     = _pf;
+    mainContext.textAlign     = _pa;
+    mainContext.textBaseline  = _pb;
+    mainContext.font          = _pfo;
+    mainContext.shadowColor   = _psc;
+    mainContext.shadowBlur    = _psb;
 };
 const hudMonoText = (txt, x, y, size, color='#fff', align='left', bold=0) => {
-    mainContext.save();
-    mainContext.font = `${bold ? '700' : '500'} ${size}px monospace`;
-    mainContext.textAlign = align;
-    mainContext.textBaseline = 'middle';
-    mainContext.fillStyle = color;
-    mainContext.shadowColor = color;
-    mainContext.shadowBlur = bold ? 8 : 4;
+    const _pf = mainContext.fillStyle, _pa = mainContext.textAlign,
+          _pb = mainContext.textBaseline, _pfo = mainContext.font,
+          _psc = mainContext.shadowColor, _psb = mainContext.shadowBlur;
+    mainContext.font          = `${bold ? '700' : '500'} ${size}px monospace`;
+    mainContext.textAlign     = align;
+    mainContext.textBaseline  = 'middle';
+    mainContext.fillStyle     = color;
+    mainContext.shadowColor   = color;
+    mainContext.shadowBlur    = bold ? 8 : 4;
     mainContext.fillText(txt, x, y);
-    mainContext.restore();
+    mainContext.fillStyle     = _pf;
+    mainContext.textAlign     = _pa;
+    mainContext.textBaseline  = _pb;
+    mainContext.font          = _pfo;
+    mainContext.shadowColor   = _psc;
+    mainContext.shadowBlur    = _psb;
 };
 // angular bracket HUD frame: 4 corner brackets, dim fill, no full outline
 const hudFrame = (x, y, w, h, color, alpha=.15) => {
     const inset = 2;
     const ix = x + inset, iy = y + inset, iw = w - inset*2, ih = h - inset*2;
     const bracket = min(18, iw * .22, ih * .45);
-    mainContext.save();
-    mainContext.fillStyle = `rgba(0,0,0,${alpha})`;
+    const _pf = mainContext.fillStyle, _ps = mainContext.strokeStyle,
+          _plw = mainContext.lineWidth, _psc = mainContext.shadowColor,
+          _psb = mainContext.shadowBlur;
+    mainContext.fillStyle   = `rgba(0,0,0,${alpha})`;
     mainContext.fillRect(ix, iy, iw, ih);
     mainContext.strokeStyle = color;
-    mainContext.lineWidth = 1.5;
+    mainContext.lineWidth   = 1.5;
     mainContext.shadowColor = color;
-    mainContext.shadowBlur = 8;
+    mainContext.shadowBlur  = 8;
     mainContext.beginPath();
     mainContext.moveTo(ix, iy + bracket); mainContext.lineTo(ix, iy); mainContext.lineTo(ix + bracket, iy);
     mainContext.moveTo(ix + iw - bracket, iy); mainContext.lineTo(ix + iw, iy); mainContext.lineTo(ix + iw, iy + bracket);
     mainContext.moveTo(ix + iw, iy + ih - bracket); mainContext.lineTo(ix + iw, iy + ih); mainContext.lineTo(ix + iw - bracket, iy + ih);
     mainContext.moveTo(ix + bracket, iy + ih); mainContext.lineTo(ix, iy + ih); mainContext.lineTo(ix, iy + ih - bracket);
     mainContext.stroke();
-    mainContext.restore();
+    mainContext.fillStyle   = _pf;
+    mainContext.strokeStyle = _ps;
+    mainContext.lineWidth   = _plw;
+    mainContext.shadowColor = _psc;
+    mainContext.shadowBlur  = _psb;
 };
 
 // Render the name-entry overlay. Replaces the GAME OVER panel while active.
@@ -281,6 +302,13 @@ const drawNameEntry = ()=>
             cx, cy + 200, 14, 'rgba(140,140,170,0.8)', 'center');
 };
 
+// FIX 1.5: Cache window-size Vector2 allocations — recompute only when canvas or scale changes
+let _lastCanvasW = 0, _lastCanvasH = 0, _lastCamScale = 0;
+// FIX 2.6: Cache sky LinearGradient — recreate only when canvas height changes
+let _skyGradient = null, _skyGradientH = 0;
+// FIX 7.1: Cache scoreboard data — don't read localStorage every frame
+let _cachedHighScores = null;
+
 engineInit(
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -301,11 +329,14 @@ engineInit(
     if (nameEntryActive)
         updateNameEntry();
 
-    const cameraSize = vec2(mainCanvas.width, mainCanvas.height).scale(1/cameraScale);
-    renderWindowSize = cameraSize.add(vec2(5));
-
-    gameplayWindowSize = vec2(mainCanvas.width, mainCanvas.height).scale(1/defaultCameraScale);
-    updateWindowSize = gameplayWindowSize.add(vec2(30));
+    // FIX 1.5: Only recompute window-size vectors when canvas or scale changes
+    if (mainCanvas.width !== _lastCanvasW || mainCanvas.height !== _lastCanvasH || cameraScale !== _lastCamScale) {
+        _lastCanvasW = mainCanvas.width; _lastCanvasH = mainCanvas.height; _lastCamScale = cameraScale;
+        const _sz = vec2(mainCanvas.width, mainCanvas.height);
+        renderWindowSize   = _sz.scale(1/cameraScale).add(vec2(5));
+        updateWindowSize   = _sz.scale(1/defaultCameraScale).add(vec2(30));
+        gameplayWindowSize = _sz.scale(1/defaultCameraScale);
+    }
     //debugRect(cameraPos, maxGameplayCameraSize);
     //debugRect(cameraPos, updateWindowSize);
 
@@ -411,6 +442,9 @@ engineInit(
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appUpdatePost
 {
+    // Flush deferred tile-cascade destroys (replaces TileCascadeDestroy EngineObjects)
+    processCascadeQueue();
+
     // Fire TV: Phase 2 of level setup — applyArtToLevel() deferred 3 frames
     // after generateLevel() so the GPU can release old TileLayer canvas
     // SharedImage mailboxes before we allocate new large ones (prevents Skia
@@ -494,10 +528,11 @@ engineInit(
             cameraPos.x = clamp(cameraPos.x, tileCollisionSize.x - w, w);
     }
 
-    // trauma-decay screen shake
+    // trauma-decay screen shake — FIX 1.7: mutate cameraPos directly (no vec2 alloc)
     if (cameraShake > 0) {
         const shakeAmt = cameraShake * cameraShake;
-        cameraPos = cameraPos.add(vec2((Math.random()*2-1)*shakeAmt*0.5, (Math.random()*2-1)*shakeAmt*0.5));
+        cameraPos.x += (Math.random()*2-1) * shakeAmt * 0.5;
+        cameraPos.y += (Math.random()*2-1) * shakeAmt * 0.5;
         cameraShake = max(0, cameraShake - 0.05);
     }
 
@@ -509,10 +544,14 @@ engineInit(
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appRender
 {
-    const gradient = mainContext.createLinearGradient(0,0,0,mainCanvas.height);
-    gradient.addColorStop(0,levelSkyColor.rgba());
-    gradient.addColorStop(1,levelSkyHorizonColor.rgba());
-    mainContext.fillStyle = gradient;
+    // FIX 2.6: Cache sky gradient — only recreate when canvas height changes
+    if (!_skyGradient || mainCanvas.height !== _skyGradientH) {
+        _skyGradientH = mainCanvas.height;
+        _skyGradient  = mainContext.createLinearGradient(0, 0, 0, mainCanvas.height);
+        _skyGradient.addColorStop(0, levelSkyColor.rgba());
+        _skyGradient.addColorStop(1, levelSkyHorizonColor.rgba());
+    }
+    mainContext.fillStyle = _skyGradient;
     //mainContext.fillStyle = levelSkyColor.rgba();
     mainContext.fillRect(0,0,mainCanvas.width, mainCanvas.height);
 
@@ -532,7 +571,7 @@ engineInit(
             ? 'D-Pad Move  OK Shoot   \u275A\u275A Pause   \u23EA Grenade   \u23E9 Roll   (hold 3s after death to restart, press at level end to skip)'
             : isUsingGamepad
                 ? '[A] Shoot    [B] Roll    [X] Grenade    [Y] Thrust    D-Pad Move'
-                : '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move';
+                : '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move  [P] Pause';
         mainContext.fillText(label, 16, h - 36);
         mainContext.restore();
     }
@@ -715,6 +754,7 @@ engineInit(
             {
                 pauseAboutScreen = pauseScoreboardScreen = false;
                 pauseScoreboardScreen = true; // open scoreboard
+                _cachedHighScores = loadHighScores(); // FIX 7.1: populate cache on open
             }
             else if (pauseMenuOption === 4)
             {
@@ -754,7 +794,8 @@ engineInit(
             mainContext.stroke();
             mainContext.restore();
 
-            const list = loadHighScores();
+            // FIX 7.1: Use cached scores — populated when screen opens, not every frame
+            const list = _cachedHighScores || [];
             if (list.length === 0)
             {
                 hudText('No scores yet \u2014 beat a level to get on the board!', cx, cy + 10, 18, '#aaa', 'center');

@@ -49,6 +49,7 @@ const pixelated = 1;              // use crisp pixels for pixel art
 const gravity = -.01;
 let mainCanvas=0, mainContext=0, mainCanvasSize=vec2();
 let engineObjects=[], engineCollideObjects=[];
+var _renderOrderDirty = 1; // set to 1 whenever renderOrder changes; cleared after sort
 let frame=0, time=0, realTime=0, paused=0, frameTimeLastMS=0, frameTimeBufferMS=0, debugFPS=0;
 
 // Fire TV Media-Remote state (set by keydown listener, consumed by app code)
@@ -203,10 +204,14 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
 
         if (fixedWidth)
         {
-            // clear and fill window if smaller
-            mainCanvas.width = fixedWidth;
-            mainCanvas.height = fixedHeight;
-            
+            // Only assign when dimensions actually change — assigning canvas.width
+            // clears the canvas and can invalidate the GPU backing texture on WebView.
+            if (mainCanvas.width !== fixedWidth || mainCanvas.height !== fixedHeight)
+            {
+                mainCanvas.width  = fixedWidth;
+                mainCanvas.height = fixedHeight;
+            }
+
             // fit to window width if smaller
             const fixedAspect = fixedWidth / fixedHeight;
             const aspect = innerWidth / innerHeight;
@@ -227,7 +232,10 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         // render sort then render while removing destroyed objects
         glPreRender(mainCanvas.width, mainCanvas.height);
         appRender();
-        engineObjects.sort((a,b)=> a.renderOrder - b.renderOrder);
+        if (_renderOrderDirty) {
+            engineObjects.sort((a,b)=> a.renderOrder - b.renderOrder);
+            _renderOrderDirty = 0;
+        }
         for(const o of engineObjects)
             o.destroyed || o.render();
         glCopyToContext(mainContext);

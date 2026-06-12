@@ -22,7 +22,7 @@ const tileBackgroundRenderOrder = -2e3;
 
 // level objects
 let players=[], playerLives, tileLayer, tileBackgroundLayer, totalKills;
-let liveEnemies = [];
+let liveEnemies = new Set();
 let currentMusicStyle = 0, currentMusicStyleName = '';
 let score = 0, levelScore = 0, levelKills = 0, levelStartTime = 0, levelTimeBonus = 0;
 
@@ -509,7 +509,7 @@ function generateLevel()
 {
     levelEndTimer.unset();
     levelScore = 0; levelKills = 0; levelStartTime = time;
-    liveEnemies = [];
+    liveEnemies = new Set();
 
     // remove all objects that are not persistnt or are descendants of something persitant
     for(const o of engineObjects)
@@ -678,7 +678,7 @@ function applyArtToLevel()
                 new Color(.8,1,1,.6), new Color(.5,.5,1,.2), // colorEndA, colorEndB
                 2, .1, .1, .2, 0,  // particleTime, sizeStart, sizeEnd, particleSpeed, particleAngleSpeed
                 .99, 1, .5, PI, .2,  // damping, angleDamping, gravityScale, particleCone, fadeRate, 
-                .5, 1              // randomness, collide, additive, randomColorLinear, renderOrder
+                .5, 0              // randomness, collide=0 (Fix 8: no tile collision for rain), additive, randomColorLinear, renderOrder
             );
             skyParticles.elasticity = .2;
             skyParticles.trailScale = 2;
@@ -698,6 +698,7 @@ function applyArtToLevel()
         }
         skyParticles.emitRate = precipitationEnable && rand()<.5 ? rand(200) : 0;
         skyParticles.angle = PI+rand(.5,-.5);
+        _skyRaycastX = null; // invalidate sky raycast cache on level load
     }
 }
 
@@ -776,6 +777,7 @@ function nextLevel()
         levelSize = vec2(min(level*99,400),200);
         levelColor = randColor(new Color(.2,.2,.2), new Color(.8,.8,.8));
         levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
+        _skyGradient = null; // invalidate cached sky gradient (rebuilt in appRender)
         levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();
         levelGroundColor = levelColor.mutate().add(new Color(.3,.3,.3)).clamp();
     }

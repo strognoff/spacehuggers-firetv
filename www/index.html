@@ -35,6 +35,28 @@ function showError(msg){
 }
 window.addEventListener('error',     function(e){ showError('Error: ' + (e.message||e.error)); });
 window.addEventListener('unhandledrejection', function(e){ showError('Promise: ' + (e.reason && e.reason.stack || e.reason)); });
+
+// Polyfill CanvasRenderingContext2D.roundRect for Amazon Fire TV WebView
+// (Chrome 118 TV fork may omit this API despite it landing in Chrome 99).
+if (typeof CanvasRenderingContext2D !== 'undefined' &&
+    !CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    if (w < 0) { x += w; w = -w; }
+    if (h < 0) { y += h; h = -h; }
+    var rad = typeof r === 'number' ? r : (Array.isArray(r) ? r[0] : 0);
+    rad = Math.min(rad, Math.min(w, h) / 2);
+    this.moveTo(x + rad, y);
+    this.lineTo(x + w - rad, y);
+    this.arcTo(x + w, y,     x + w, y + rad,     rad);
+    this.lineTo(x + w, y + h - rad);
+    this.arcTo(x + w, y + h, x + w - rad, y + h, rad);
+    this.lineTo(x + rad, y + h);
+    this.arcTo(x,     y + h, x,     y + h - rad, rad);
+    this.lineTo(x,     y + rad);
+    this.arcTo(x,     y,     x + rad, y,          rad);
+    this.closePath();
+  };
+}
 </script>
 <script src=engine/engineUtil.js></script>
 <script src=engine/engineDebug.js></script>

@@ -43,9 +43,9 @@ function makeBlood(pos, amount=50)
         undefined, undefined,   // tileIndex, tileSize
         new Color(1,0,0), new Color(.5,0,0), // colorStartA, colorStartB
         new Color(1,0,0), new Color(.5,0,0), // colorEndA, colorEndB
-        3, .1, .1, .1, .1, // particleTime, sizeStart, sizeEnd, particleSpeed, particleAngleSpeed
+        lowGraphicsSettings?.5:1, .1, .1, .1, .1, // particleTime(3→1s), sizeStart, sizeEnd, particleSpeed, particleAngleSpeed
         1, .95, .7, PI, 0,  // damping, angleDamping, gravityScale, particleCone, fadeRate, 
-        .5, 1              // randomness, collide, additive, randomColorLinear, renderOrder
+        .5, lowGraphicsSettings?0:1 // randomness, collide(0 on low-graphics), additive, randomColorLinear, renderOrder
     );
     emitter.particleDestroyCallback = persistentParticleDestroyCallback;
     return emitter;
@@ -225,21 +225,18 @@ function explosion(pos, radius=2)
 
 ///////////////////////////////////////////////////////////////////////////////
 
-class TileCascadeDestroy extends EngineObject 
+// Lightweight deferred tile-destroy queue — replaces TileCascadeDestroy EngineObject.
+// Avoids adding a full physics/render object to engineObjects for every cascading tile.
+const _cascadeQueue = [];
+function processCascadeQueue()
 {
-    constructor(pos, cascadeChance=1, glass=0)
+    for (let i = _cascadeQueue.length - 1; i >= 0; i--)
     {
-        super(pos, vec2());
-        this.cascadeChance = cascadeChance;
-        this.destroyTimer = new Timer(glass ? .05 : rand(.3, .1));
-    }
-
-    update()
-    {
-        if (this.destroyTimer.elapsed())
+        if (time >= _cascadeQueue[i].fireAt)
         {
-            destroyTile(this.pos, 1, 1, this.cascadeChance);
-            this.destroy();
+            const { pos, cascadeChance } = _cascadeQueue[i];
+            _cascadeQueue.splice(i, 1);
+            destroyTile(pos, 1, 1, cascadeChance);
         }
     }
 }
@@ -356,13 +353,13 @@ function destroyTile(pos, makeSound = 1, cleanNeighbors = 1, maxCascadeChance = 
         {
             maxCascadeChance = 1;
             if (getTileCollisionData(pos.add(vec2(0,-1))) == tileType)
-                new TileCascadeDestroy(pos.add(vec2(0,-1)), 1, 1);
+                _cascadeQueue.push({ pos: pos.add(vec2(0,-1)), cascadeChance: 1, fireAt: time + .05 });
         }
         else if (tileType != tileType_dirt)
             maxCascadeChance = 0;
 
         if (rand() < maxCascadeChance && getTileCollisionData(pos.add(vec2(0,1))) == tileType)
-            new TileCascadeDestroy(pos.add(vec2(0,1)), maxCascadeChance * .4, tileType == tileType_glass);
+            _cascadeQueue.push({ pos: pos.add(vec2(0,1)), cascadeChance: maxCascadeChance * .4, fireAt: time + rand(.3, .1) });
     }
 
     return 1;
@@ -370,31 +367,55 @@ function destroyTile(pos, makeSound = 1, cleanNeighbors = 1, maxCascadeChance = 
 
 ///////////////////////////////////////////////////////////////////////////////
 
+let _starCache = null;
+let _starCacheSeed = -1;
+
 function drawStars()
 {
-    randSeed = levelSeed;
-    const starCount = lowGraphicsSettings ? 150 : 300;
-    for(let i = starCount; i--;)
+    // Rebuild star cache only when the level changes (levelSeed changes).
+    // This eliminates 150–300 new Color / setHSLA allocations per frame.
+    if (_starCacheSeed !== levelSeed)
     {
-        let size = randSeeded(6, 1);
-        let speed = randSeeded() < .9 ? randSeeded(5) : randSeeded(99,9);
-        let color = (new Color).setHSLA(randSeeded(.2,-.3), randSeeded()**9, randSeeded(1,.5), randSeeded(.9,.3));
-        if (i < 9)
+        _starCacheSeed = levelSeed;
+        randSeed = levelSeed;
+        const starCount = lowGraphicsSettings ? 150 : 300;
+        _starCache = [];
+        for (let i = starCount; i--;)
         {
-            // suns or moons
-            size = randSeeded()**3*99 + 9;
-            speed = randSeeded(5);
-            color = (new Color).setHSLA(randSeeded(), randSeeded(), randSeeded(1,.5)).add(levelSkyColor.scale(.5)).clamp();
+            let size  = randSeeded(6, 1);
+            let speed = randSeeded() < .9 ? randSeeded(5) : randSeeded(99,9);
+            let isSun = i < 9;
+            let color;
+            if (isSun)
+            {
+                size  = randSeeded()**3*99 + 9;
+                speed = randSeeded(5);
+                color = (new Color).setHSLA(randSeeded(), randSeeded(), randSeeded(1,.5)).add(levelSkyColor.scale(.5)).clamp();
+            }
+            else
+            {
+                color = (new Color).setHSLA(randSeeded(.2,-.3), randSeeded()**9, randSeeded(1,.5), randSeeded(.9,.3));
+            }
+            // Store fractional positions so we can recompute screen pos each frame
+            // without re-running randSeeded (cache the raw random values instead).
+            const wx = randSeeded(1);   // fraction in [0,1) scaled to (w) each frame
+            const wy = randSeeded(1);
+            const speedY = randSeeded(1,.2); // the randSeeded(1,.2) factor for y-speed
+            _starCache.push({ size, speed, color, wx, wy, speedY, isSun });
         }
-        
-        const w = mainCanvas.width+400, h = mainCanvas.height+400;
+    }
+
+    // Render from cache — no allocations beyond the vec2 screen position
+    const w = mainCanvas.width+400, h = mainCanvas.height+400;
+    for (const star of _starCache)
+    {
+        const { size, speed, color, wx, wy, speedY } = star;
         const screenPos = vec2(
-            (randSeeded(w)+time*speed)%w-200,
-            (randSeeded(h)+time*speed*randSeeded(1,.2))%h-200);
+            (wx*w + time*speed) % w - 200,
+            (wy*h + time*speed*speedY) % h - 200);
 
         if (lowGraphicsSettings)
         {
-            // drawing stars with gl wont work in low graphics mode, just draw rects
             mainContext.fillStyle = color.rgba();
             if (size < 9)
                 mainContext.fillRect(screenPos.x, screenPos.y, size, size);
@@ -406,13 +427,20 @@ function drawStars()
     }
 }
 
+let _skyRaycastX = null;
+let _skyRaycastResult = null;
+
 function updateSky()
 {
     if (!skyParticles)
         return;
 
     let skyParticlesPos = cameraPos.add(vec2(rand(-40,40),0));
-    const raycastHit = tileCollisionRaycast(vec2(skyParticlesPos.x, levelSize.y), vec2(skyParticlesPos.x, 0));
+    if (_skyRaycastX === null || Math.abs(skyParticlesPos.x - _skyRaycastX) > 1) {
+        _skyRaycastX = skyParticlesPos.x;
+        _skyRaycastResult = tileCollisionRaycast(vec2(skyParticlesPos.x, levelSize.y), vec2(skyParticlesPos.x, 0));
+    }
+    const raycastHit = _skyRaycastResult;
     if (raycastHit && raycastHit.y > cameraPos.y+10)
         skyParticlesPos = raycastHit;
     skyParticles.pos = skyParticlesPos.add(vec2(0,20));

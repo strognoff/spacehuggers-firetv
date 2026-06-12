@@ -7,6 +7,10 @@
 
 'use strict';
 
+// Scratch objects reused every frame to avoid per-particle GC pressure
+const _pScratchSize  = new Vector2(0, 0);
+const _pScratchColor = new Color(0, 0, 0, 0);
+
 class ParticleEmitter extends EngineObject
 {
     constructor
@@ -161,15 +165,16 @@ class Particle extends EngineObject
         // modulate size and color
         const p = min((time - this.spawnTime) / this.lifeTime, 1);
         const radius = this.sizeStart + p * this.sizeEndDelta;
-        const size = new Vector2(radius, radius);
+        _pScratchSize.x = _pScratchSize.y = radius;
+        const size = _pScratchSize;
 
         const fadeRate = this.fadeRate*.5;
-        const color = new Color(
-            this.colorStart.r + p * this.colorEndDelta.r,
-            this.colorStart.g + p * this.colorEndDelta.g,
-            this.colorStart.b + p * this.colorEndDelta.b,
-            (this.colorStart.a + p * this.colorEndDelta.a) * 
-             (p < fadeRate ? p/fadeRate : p > 1-fadeRate ? (1-p)/fadeRate : 1)); // fade alpha
+        _pScratchColor.r = this.colorStart.r + p * this.colorEndDelta.r;
+        _pScratchColor.g = this.colorStart.g + p * this.colorEndDelta.g;
+        _pScratchColor.b = this.colorStart.b + p * this.colorEndDelta.b;
+        _pScratchColor.a = (this.colorStart.a + p * this.colorEndDelta.a) *
+             (p < fadeRate ? p/fadeRate : p > 1-fadeRate ? (1-p)/fadeRate : 1); // fade alpha
+        const color = _pScratchColor;
 
         // draw the particle
         this.additive && setBlendMode(1);
@@ -190,8 +195,8 @@ class Particle extends EngineObject
 
         if (p == 1)
         {
-            this.color = color;
-            this.size = size;
+            this.color = new Color(color.r, color.g, color.b, color.a);
+            this.size = new Vector2(size.x, size.y);
             this.destroyCallback && this.destroyCallback(this);
             this.destroyed = 1;
             return;

@@ -24,6 +24,10 @@ let audioContext;            // main audio context
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// Cache of synthesized AudioBuffers keyed by sound params string.
+// Only deterministic sounds (randomness param === 0) are cached.
+const _soundCache = new Map();
+
 // play a zzfx sound in world space with attenuation and culling
 function playSound(zzfxSound, pos, range=defaultSoundRange, volumeScale=1)
 {
@@ -34,11 +38,37 @@ function playSound(zzfxSound, pos, range=defaultSoundRange, volumeScale=1)
     if (lengthSquared > maxRange**2)
         return;
 
-    // copy sound (so volume scale isnt permanant)
-    zzfxSound = [...zzfxSound];
-
     // scale volume — SFX_BOOST makes effects cut through the music bed.
     const scale = volumeScale * SFX_BOOST * percent(lengthSquared**.5, range, maxRange);
+
+    // For deterministic sounds (randomness=0), synthesize once and cache the AudioBuffer.
+    // Sounds with non-zero randomness (index 1) vary per play and bypass the cache.
+    const canCache = !zzfxSound[1];
+    if (canCache && soundEnable && hadInput)
+    {
+        const cacheKey = zzfxSound.toString();
+        let cachedBuffer = _soundCache.get(cacheKey);
+        if (!cachedBuffer)
+        {
+            const samples = zzfxG(...zzfxSound);
+            if (!audioContext)
+                audioContext = new (window.AudioContext||webkitAudioContext);
+            cachedBuffer = audioContext.createBuffer(1, samples.length, zzfxR);
+            cachedBuffer.getChannelData(0).set(samples);
+            _soundCache.set(cacheKey, cachedBuffer);
+        }
+        const src = audioContext.createBufferSource();
+        src.buffer = cachedBuffer;
+        // apply volume via a GainNode so the cached buffer is not modified
+        const gain = audioContext.createGain();
+        gain.gain.value = scale;
+        src.connect(gain).connect(audioContext.destination);
+        src.start();
+        return src;
+    }
+
+    // non-deterministic: fall back to full synthesis path
+    zzfxSound = [...zzfxSound];
     zzfxSound[0] = (zzfxSound[0]||1) * scale;
     zzfx(...zzfxSound);
 }

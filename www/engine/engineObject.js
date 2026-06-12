@@ -14,6 +14,11 @@
 
 'use strict';
 
+// Scratch vectors for tile-side disambiguation — reused every physics tick
+// to avoid two new Vector2 allocations per collidable object per frame.
+const _sideTestA = new Vector2(0, 0);
+const _sideTestB = new Vector2(0, 0);
+
 ///////////////////////////////////////////////////////////////////////////////
 
 // object defaults
@@ -53,6 +58,7 @@ class EngineObject
 
         // add to list of objects
         engineObjects.push(this);
+        _renderOrderDirty = 1; // new object — re-sort render order next frame
     }
     
     update()
@@ -182,8 +188,10 @@ class EngineObject
                 if (!tileCollisionTest(oldPos, this.size, this))
                 {
                     // test which side we bounced off (or both if a corner)
-                    const isBlockedY = tileCollisionTest(new Vector2(oldPos.x, this.pos.y), this.size, this);
-                    const isBlockedX = tileCollisionTest(new Vector2(this.pos.x, oldPos.y), this.size, this);
+                    _sideTestA.x = oldPos.x;    _sideTestA.y = this.pos.y;
+                    _sideTestB.x = this.pos.x;  _sideTestB.y = oldPos.y;
+                    const isBlockedY = tileCollisionTest(_sideTestA, this.size, this);
+                    const isBlockedX = tileCollisionTest(_sideTestB, this.size, this);
                     if (isBlockedY || !isBlockedX)
                     {
                         // set if landed on ground
@@ -217,6 +225,7 @@ class EngineObject
         
         // disconnect from parent and destroy chidren
         this.destroyed = 1;
+        _renderOrderDirty = 1; // object removed — re-sort render order next frame
         this.parent && this.parent.removeChild(this);
         for(const child of this.children)
             child.destroy(child.parent = 0);

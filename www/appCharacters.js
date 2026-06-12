@@ -35,12 +35,15 @@ class Character extends GameObject
         this.renderOrder = 10;
         this.overkill = this.grenadeCount = this.walkCyclePercent = 0;
         this.grendeThrowTimer = new Timer;
+        this._lastPos     = vec2();
+        this._oldVelocity = vec2();
         this.setCollision();
     }
     
     update() 
     {
-        this.lastPos = this.pos.copy();
+        this._lastPos.x = this.pos.x; this._lastPos.y = this.pos.y;
+        const lastPos = this._lastPos;
         this.gravityScale = 1; // reset default gravity (incase climbing ladder)
 
         if (this.isDead() || !this.inUpdateWindow() && !this.persistent)
@@ -163,7 +166,8 @@ class Character extends GameObject
         this.velocity.x = clamp(this.velocity.x + moveInput.x * .042, maxCharacterSpeed, -maxCharacterSpeed);
 
         // call parent, update physics
-        const oldVelocity = this.velocity.copy();
+        this._oldVelocity.x = this.velocity.x; this._oldVelocity.y = this.velocity.y;
+        const oldVelocity = this._oldVelocity;
         super.update();
         if (!this.isPlayer && !this.dodgeTimer.active())
         {
@@ -301,7 +305,7 @@ class Character extends GameObject
 
         if (data == tileType_ladder)
         {
-            if (pos.y + 1 > this.lastPos.y - this.size.y*.5)
+            if (pos.y + 1 > this._lastPos.y - this.size.y*.5)
                 return;
 
             if (getTileCollisionData(pos.add(vec2(0,1))) // above
@@ -432,7 +436,7 @@ class Enemy extends Character
 
         new Weapon(this.pos, this);
          --levelEnemyCount;
-        liveEnemies.push(this);
+        liveEnemies.add(this);
 
         this.sightCheckFrame = rand(9)|0;
     }
@@ -668,8 +672,7 @@ class Enemy extends Character
         if (this.isDead())
             return 0;
 
-        const enemyIndex = liveEnemies.indexOf(this);
-        enemyIndex > -1 && liveEnemies.splice(enemyIndex, 1);
+        liveEnemies.delete(this);
         super.kill(damagingObject);
         if (!levelWarmup) {
             ++totalKills;

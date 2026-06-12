@@ -16,6 +16,8 @@
 let tileCollision = [];
 let tileCollisionSize = vec2();
 const tileLayerCanvasCache = [];
+// Scratch vector reused inside tileCollisionTest to avoid per-cell allocation
+const _tileTestPos = new Vector2(0, 0);
 const defaultTileLayerRenderOrder = -1e9;
 const debugRaycast = 0;
 
@@ -44,7 +46,7 @@ function tileCollisionTest(pos, size=vec2(), object)
     for(let x = minX; x <= maxX; ++x)
     {
         const tileData = tileCollision[y*tileCollisionSize.x + x];
-        if (tileData && (!object || object.collideWithTile(tileData, new Vector2(x, y))))
+        if (tileData && (!object || (_tileTestPos.x = x, _tileTestPos.y = y, object.collideWithTile(tileData, _tileTestPos))))
             return 1;
     }
 }

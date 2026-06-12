@@ -10,6 +10,8 @@ const weaponType_pistol  = 0;
 const weaponType_shotgun = 1;
 const weaponType_plasma  = 2;
 
+const PICKUP_COLORS = [new Color(1,1,0), new Color(1,.5,0), new Color(0,1,1)];
+
 class GameObject extends EngineObject 
 {
     constructor(pos, size, tileIndex, tileSize, angle)
@@ -40,10 +42,11 @@ class GameObject extends EngineObject
             {
                 // flash white when damaged
                 const a = .5*percent(this.damageTimer.get(), 0, .15);
-                this.additiveColor = new Color(a,a,a,0);
+                this.additiveColor.r = this.additiveColor.g = this.additiveColor.b = a;
+                this.additiveColor.a = 0;
             }
             else
-                this.additiveColor = new Color(0,0,0,0);
+                this.additiveColor.r = this.additiveColor.g = this.additiveColor.b = this.additiveColor.a = 0;
         }
         
         if (!this.parent && this.pos.y < -1)
@@ -365,6 +368,7 @@ class Grenade extends GameObject
 
         this.health = this.healthMax = 1e3;
         this.beepTimer = new Timer(1);
+        this.alertTimer = new Timer(0); // fires immediately on first frame
         this.elasticity = .3;
         this.friction   = .9;
         this.angleDamping = .96;
@@ -389,7 +393,10 @@ class Grenade extends GameObject
             this.beepTimer.set(1);
         }
 
-        alertEnemies(this.pos, this.pos);
+        if (this.alertTimer.elapsed()) {
+            alertEnemies(this.pos, this.pos);
+            this.alertTimer.set(1); // throttle to once per second
+        }
     }
        
     render()
@@ -494,7 +501,7 @@ class Bullet extends EngineObject
         super(pos, vec2(.25));  // nonzero size so forEachObject overlaps register on BonusBox
         this.color = new Color(1,1,0,1);
         this.lastVelocity = this.velocity;
-        this.setCollision();
+        this.setCollision(0, 0, 1); // tile collision only — no object-vs-object physics (Fix 7)
 
         this.damage = this.damping = 1;
         this.gravityScale = 0;
@@ -526,7 +533,8 @@ class Bullet extends EngineObject
             return;
         }
 
-        // check if hit someone
+        // check if hit someone (throttled: scan every other frame to halve cost)
+        if (frame % 2 === 0)
         forEachObject(this.pos, this.size, (o)=>
         {
             if (o.isGameObject && !o.parent && o.team != this.team)
@@ -703,9 +711,8 @@ class WeaponPickup extends EngineObject {
         }
     }
     render() {
-        // colors: orange=shotgun, cyan=plasma
-        const colors = [new Color(1,1,0), new Color(1,.5,0), new Color(0,1,1)];
-        const c = colors[this.pickupType] || colors[0];
+        // colors: orange=shotgun, cyan=plasma (module-scope PICKUP_COLORS — no per-frame alloc)
+        const c = PICKUP_COLORS[this.pickupType] || PICKUP_COLORS[0];
 
         // bob purely as offset from spawn — no positional drift
         const bobY = Math.sin(this.bobTimer) * 0.2;
