@@ -71,9 +71,9 @@ function makeDebris(pos, color = new Color, amount = 50)
         undefined, undefined, // tileIndex, tileSize
         color, color2,       // colorStartA, colorStartB
         color, color2,       // colorEndA, colorEndB
-        3, .2, .2, .1, .05, // particleTime, sizeStart, sizeEnd, particleSpeed, particleAngleSpeed
+        .6, .2, .2, .1, .05, // particleTime(3→0.6s), sizeStart, sizeEnd, particleSpeed, particleAngleSpeed
         1, .95, .4, PI, 0,  // damping, angleDamping, gravityScale, particleCone, fadeRate, 
-        .5, 1               // randomness, collide, additive, randomColorLinear, renderOrder
+        .5, 0               // randomness, collide(1→0: no tile physics), additive, randomColorLinear, renderOrder
     );
     emitter.elasticity = .3;
     emitter.particleDestroyCallback = persistentParticleDestroyCallback;
@@ -129,11 +129,20 @@ function makeWater(pos, amount=400)
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// Re-entrancy guard: limits how deep explosion chains can cascade.
+// Without this, a grenade hitting 3 barrels each hitting 2 more can
+// spawn 7+ simultaneous explosions in under 500ms.
+let activeExplosions = 0;
+const maxChainExplosions = 4;
+
 function explosion(pos, radius=2)
 {
     ASSERT(radius > 0);
     if (levelWarmup)
         return;
+    if (activeExplosions >= maxChainExplosions)
+        return; // cap chain depth
+    ++activeExplosions;
 
     const damage = radius*2;
 
@@ -182,12 +191,12 @@ function explosion(pos, radius=2)
 
     cameraShake = min(1, cameraShake + radius * 0.15);
 
-    // On low-end hardware (Fire TV) scale back particle counts heavily so a
-    // chain of explosions doesn't stall the render loop.
-    const smokeRate = lowGraphicsSettings ? 15*radius : 50*radius;
-    const fireRate  = lowGraphicsSettings ? 25*radius : 100*radius;
-    const smokeTime = lowGraphicsSettings ? .1 : .2;
-    const fireTime  = lowGraphicsSettings ? .05 : .1;
+    // Keep particle counts low on all hardware — the emitters are the dominant
+    // per-frame cost during chain explosions. At radius=3: 30 smoke + 60 fire.
+    const smokeRate = lowGraphicsSettings ? 8*radius : 10*radius;
+    const fireRate  = lowGraphicsSettings ? 15*radius : 20*radius;
+    const smokeTime = lowGraphicsSettings ? .08 : .1;
+    const fireTime  = lowGraphicsSettings ? .04 : .06;
 
     // smoke
     new ParticleEmitter(
@@ -210,6 +219,8 @@ function explosion(pos, radius=2)
         .9, 1, 0, PI, .05,  // damping, angleDamping, gravityScale, particleCone, fadeRate, 
         .5, 0, 1, 0, 1e9              // randomness, collide, additive, randomColorLinear, renderOrder
     );
+
+    --activeExplosions;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -321,11 +332,11 @@ function destroyTile(pos, makeSound = 1, cleanNeighbors = 1, maxCascadeChance = 
     const layerData = tileLayer.getData(pos);
     if (layerData)
     {
-        // On low-end hardware skip per-tile debris during explosions (makeSound==0
-        // signals an explosion-driven destroy). The explosion's own particles cover
-        // the visual; skipping debris prevents hundreds of long-lived colliding
-        // particles from stalling the frame.
-        if (!lowGraphicsSettings || makeSound)
+        // Skip per-tile debris during silent explosion-driven destroys (makeSound==0).
+        // The explosion's own fire/smoke emitters cover the visual. Spawning 50 debris
+        // particles per tile (×28 tiles per radius-3 explosion) creates hundreds of
+        // long-lived objects that stall the frame on both desktop and Fire TV.
+        if (makeSound)
             makeDebris(centerPos, layerData.color.mutate());
         makeSound && playSound(sound_destroyTile, centerPos);
 

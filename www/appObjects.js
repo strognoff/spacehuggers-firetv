@@ -605,11 +605,11 @@ class Bullet extends EngineObject
 
 ///////////////////////////////////////////////////////////////////////////////
 
-class BonusBox extends EngineObject {
+class BonusBox extends GameObject {
     constructor(pos, color)
     {
         super(pos, vec2(1));
-        this.isGameObject = 1;          // required so Bullet.update's filter sees it
+        // isGameObject is set by GameObject constructor — no need to repeat it here
         this.team         = team_none;   // neutral — player bullets (team_player != team_none) hit it
         this.isBonusBox   = 1;
         this.bobTimer     = 0;

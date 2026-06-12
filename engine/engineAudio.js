@@ -46,7 +46,7 @@ function playSound(zzfxSound, pos, range=defaultSoundRange, volumeScale=1)
 // current music source and gain node (created lazily with audioContext)
 let musicSource  = 0;
 let musicGain    = 0;
-let musicMuted   = 0;
+let musicMuted   = 1; // default OFF — player can enable via pause menu
 let musicBuffers = 0; // last rendered [leftBuf, rightBuf] — reused on unmute
 
 // toggle music mute — 1 = muted, 0 = audible

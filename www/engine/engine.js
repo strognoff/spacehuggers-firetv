@@ -78,43 +78,6 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         mainCanvas.style = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);image-rendering:crisp-edges;image-rendering:pixelated';          // pixelated rendering
         mainContext = mainCanvas.getContext('2d');
 
-        // Fire TV: handle WebGL context loss gracefully. The WebView's GPU
-        // process can run out of memory during heavy level transitions
-        // (Skia OOM → "context lost"). Without preventDefault the browser
-        // will never fire webglcontextrestored, so we must call it.
-        // We freeze the update loop while the context is lost, and
-        // re-upload the tile texture on restore.
-        mainCanvas.addEventListener('webglcontextlost', (e)=>
-        {
-            e.preventDefault();
-            glContextLost = 1;
-            glContextLostTime = performance.now();
-            console.warn('[firetv] WebGL context lost');
-        }, false);
-        mainCanvas.addEventListener('webglcontextrestored', ()=>
-        {
-            glContextLost = 0;
-            glContextLostTime = 0;
-            // Verify the context is actually usable before resuming WebGL mode.
-            // Amazon WebView can fire webglcontextrestored after a
-            // GL_UNKNOWN_CONTEXT_RESET_KHR even though the context is still
-            // lost — isContextLost() returns true in that case. Treat it as
-            // unrecoverable and fall back to Canvas2D permanently.
-            if (glEnable && glContext)
-            {
-                if (glContext.isContextLost())
-                {
-                    console.warn('[firetv] webglcontextrestored but context still lost, falling back to Canvas2D');
-                    glDisable();
-                }
-                else
-                {
-                    glTileTexture = glCreateTexture(tileImage);
-                    console.log('[firetv] WebGL context restored and healthy');
-                }
-            }
-        }, false);
-
         // TEMP DEBUG: confirms the engine JS is running on the device. If
         // you don't see this in adb logcat, the WebView isn't executing
         // www/app.js at all (different problem — likely APK stale or
@@ -146,7 +109,7 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         // keydown handler in engineInput.js.
         window.addEventListener('keydown', (e)=>
         {
-            if (e.keyCode === 179)
+            if (e.keyCode === 179 || e.keyCode === 80) // 179=Fire TV Play/Pause, 80=P
             {
                 e.preventDefault();
                 togglePause();
@@ -310,8 +273,15 @@ function engineUpdateObjects()
     }
     for(const o of engineObjects)
         o.parent || updateObject(o);
-    engineObjects = engineObjects.filter(o=>!o.destroyed);
-    engineCollideObjects = engineCollideObjects.filter(o=>!o.destroyed);
+    // In-place removal — avoids allocating a new array every frame (60x/sec GC pressure).
+    let _j = 0;
+    for (let _i = 0; _i < engineObjects.length; _i++)
+        if (!engineObjects[_i].destroyed) engineObjects[_j++] = engineObjects[_i];
+    engineObjects.length = _j;
+    _j = 0;
+    for (let _i = 0; _i < engineCollideObjects.length; _i++)
+        if (!engineCollideObjects[_i].destroyed) engineCollideObjects[_j++] = engineCollideObjects[_i];
+    engineCollideObjects.length = _j;
     time = ++frame / FPS;
 }
 

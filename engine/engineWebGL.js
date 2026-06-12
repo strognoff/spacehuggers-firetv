@@ -22,6 +22,10 @@ let glEnable = (()=>
         const probe = document.createElement('canvas');
         const ctx = probe.getContext('webgl') || probe.getContext('experimental-webgl');
         if (!ctx) return 0;
+        // Release the probe context immediately so the GPU driver doesn't
+        // hold two simultaneous WebGL contexts (probe + real glCanvas).
+        const loseExt = ctx.getExtension('WEBGL_lose_context');
+        if (loseExt) loseExt.loseContext();
         return 1;
     }
     catch (e) { return 0; }
@@ -37,13 +41,43 @@ function glInit()
 {
     if (!glEnable) return;
 
-    // Fire TV: if the WebView's GPU process dies, switch to Canvas2D
-    // so the rest of the game keeps running. This fires when the renderer
-    // process crashes (the white-screen scenario).
-    const onContextLost = (e)=> { e.preventDefault(); glDisable(); };
     glCanvas = document.createElement('canvas');
-    glCanvas.addEventListener('webglcontextlost', onContextLost, false);
-    glContext = glCanvas.getContext('webgl', {antialias:!pixelated});
+
+    // Fire TV: WebGL context loss fires on the WebGL canvas (glCanvas), NOT
+    // on the 2D mainCanvas. Attach the handlers here so they actually fire.
+    glCanvas.addEventListener('webglcontextlost', (e)=>
+    {
+        e.preventDefault(); // required — without this, webglcontextrestored never fires
+        glContextLost = 1;
+        glContextLostTime = performance.now();
+        console.warn('[firetv] WebGL context lost');
+    }, false);
+    glCanvas.addEventListener('webglcontextrestored', ()=>
+    {
+        glContextLost = 0;
+        glContextLostTime = 0;
+        // Amazon WebView can fire webglcontextrestored after GL_UNKNOWN_CONTEXT_RESET_KHR
+        // even though the context is still broken — isContextLost() returns true in that
+        // case. Fall back to Canvas2D permanently rather than uploading into a dead context.
+        if (glEnable && glContext)
+        {
+            if (glContext.isContextLost())
+            {
+                console.warn('[firetv] webglcontextrestored but context still lost, falling back to Canvas2D');
+                glDisable();
+            }
+            else
+            {
+                glTileTexture = glCreateTexture(tileImage);
+                console.log('[firetv] WebGL context restored and healthy');
+            }
+        }
+    }, false);
+
+    // powerPreference:'low-power' tells the driver to use less VRAM and be less
+    // aggressive about keeping allocations resident — reduces OOM pressure on
+    // the Fire TV's embedded GPU.
+    glContext = glCanvas.getContext('webgl', {antialias:!pixelated, powerPreference:'low-power'});
     if (!glContext) { glDisable(); return; }
 
     glTileTexture = glCreateTexture(tileImage);

@@ -12,6 +12,14 @@ const soundEnable = 1;       // all audio can be disabled
 const defaultSoundRange = 15;// distance where taper starts
 const soundTaperPecent = .5; // extra range added for sound taper
 const audioVolume = .5;        // volume for sound, music and speech
+// Music plays at a lower level so sound effects (gunfire, explosions,
+// grenades) cut through. Both scale relative to audioVolume above.
+//   music at 0.35 = quietly under the action
+//   sfx boost 1.6  = noticeably louder than before
+// Tweak these two together; raising SFX_BOOST or lowering MUSIC_GAIN makes
+// the effect-vs-music separation more dramatic.
+const MUSIC_GAIN = .35;
+const SFX_BOOST  = 1.6;
 let audioContext;            // main audio context
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -29,8 +37,8 @@ function playSound(zzfxSound, pos, range=defaultSoundRange, volumeScale=1)
     // copy sound (so volume scale isnt permanant)
     zzfxSound = [...zzfxSound];
 
-    // scale volume
-    const scale = volumeScale * percent(lengthSquared**.5, range, maxRange);
+    // scale volume — SFX_BOOST makes effects cut through the music bed.
+    const scale = volumeScale * SFX_BOOST * percent(lengthSquared**.5, range, maxRange);
     zzfxSound[0] = (zzfxSound[0]||1) * scale;
     zzfx(...zzfxSound);
 }
@@ -38,7 +46,7 @@ function playSound(zzfxSound, pos, range=defaultSoundRange, volumeScale=1)
 // current music source and gain node (created lazily with audioContext)
 let musicSource  = 0;
 let musicGain    = 0;
-let musicMuted   = 0;
+let musicMuted   = 1; // default OFF — player can enable via pause menu
 let musicBuffers = 0; // last rendered [leftBuf, rightBuf] — reused on unmute
 
 // toggle music mute — 1 = muted, 0 = audible
@@ -46,7 +54,7 @@ function setMusicMute(muted)
 {
     musicMuted = muted ? 1 : 0;
     if (musicGain)
-        musicGain.gain.value = musicMuted ? 0 : 1;
+        musicGain.gain.value = musicMuted ? 0 : MUSIC_GAIN;
 
     if (musicMuted)
     {
@@ -373,7 +381,7 @@ const zzfxP = (left, right) => {
     // create shared gain node once; apply current mute state immediately
     if (!musicGain) {
         musicGain = audioContext.createGain();
-        musicGain.gain.value = musicMuted ? 0 : 1;
+        musicGain.gain.value = musicMuted ? 0 : MUSIC_GAIN;
         musicGain.connect(audioContext.destination);
     }
     const buf = audioContext.createBuffer(2, left.length, zzfxR);
