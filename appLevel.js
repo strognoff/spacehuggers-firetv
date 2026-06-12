@@ -20,6 +20,24 @@ const tileType_window  = 8;
 const tileRenderOrder = -1e3;
 const tileBackgroundRenderOrder = -2e3;
 
+function normalizeTerrainColor(color)
+{
+    const minChannel = min(color.r, color.g, color.b);
+    const maxChannel = max(color.r, color.g, color.b);
+    const luminance = (color.r + color.g + color.b) / 3;
+    const saturation = maxChannel - minChannel;
+
+    // Keep terrain away from washed-out white/gray so tile detail stays visible.
+    if (luminance > .42)
+        color = color.scale(.42 / luminance, 1);
+    if (saturation < .12)
+    {
+        const tint = randColor(new Color(.18,.16,.2), new Color(.32,.3,.36));
+        color = color.lerp(tint, .35);
+    }
+    return color.clamp();
+}
+
 // level objects
 let players=[], playerLives, tileLayer, tileBackgroundLayer, totalKills;
 let liveEnemies = new Set();
@@ -802,7 +820,7 @@ function nextLevel()
             levelSize.x = min(levelSize.x, 100);
             levelSize.y = min(levelSize.y, 100);
         }
-        levelColor = randColor(new Color(.2,.2,.2), new Color(.4,.4,.4));
+        levelColor = normalizeTerrainColor(randColor(new Color(.2,.2,.2), new Color(.8,.8,.8)));
         levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
         _skyGradient = null; // invalidate cached sky gradient (rebuilt in appRender)
         levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();

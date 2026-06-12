@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.76';
+const APP_VERSION = '1.0.80';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -164,8 +164,8 @@ const hudText = (txt, x, y, size, color='#fff', align='left') => {
     mainContext.textAlign     = align;
     mainContext.textBaseline  = 'middle';
     mainContext.fillStyle     = color;
-    mainContext.shadowColor   = 'rgba(0,0,0,0.8)';
-    mainContext.shadowBlur    = 4;
+    mainContext.shadowColor   = 'rgba(0,0,0,0.95)';
+    mainContext.shadowBlur    = 10;
     mainContext.fillText(txt, x, y);
     mainContext.fillStyle     = _pf;
     mainContext.textAlign     = _pa;
@@ -193,7 +193,7 @@ const hudMonoText = (txt, x, y, size, color='#fff', align='left', bold=0) => {
     mainContext.shadowBlur    = _psb;
 };
 // angular bracket HUD frame: 4 corner brackets, dim fill, no full outline
-const hudFrame = (x, y, w, h, color, alpha=.15) => {
+const hudFrame = (x, y, w, h, color, alpha=.65) => {
     const inset = 2;
     const ix = x + inset, iy = y + inset, iw = w - inset*2, ih = h - inset*2;
     const bracket = min(18, iw * .22, ih * .45);
@@ -406,7 +406,7 @@ engineInit(
     // Fire TV: also accept OK (raw 13) and the tap-fire mapped key (91)
     // as restart triggers, since on the remote the user has no Z/Space/GpadA.
     // Skip the restart while the name-entry keyboard is up — it owns OK input.
-    if (!nameEntryActive && minDeadTime > 3 && (keyWasPressed(90) || keyWasPressed(32) || keyWasPressed(13) || keyWasPressed(91) || gamepadWasPressed(0)) || keyWasPressed(82))
+    if (!nameEntryActive && minDeadTime > 3 && (keyWasPressed(90) || keyWasPressed(32) || keyWasPressed(13) || keyWasPressed(91) || keyWasPressed(82) || gamepadWasPressed(0)))
     {
         // If the run's score qualifies for the top 10, intercept the reset
         // and route the player through the on-screen name-entry keyboard
@@ -423,6 +423,10 @@ engineInit(
         }
         else
         {
+            nameEntryActive       = false;
+            nameEntryBuffer       = '';
+            pauseAboutScreen      = false;
+            pauseScoreboardScreen = false;
             resetGame();
         }
     }
@@ -571,6 +575,8 @@ engineInit(
         mainContext.font = '24px arial';
         mainContext.textBaseline = 'top';
         mainContext.fillStyle = '#fff';
+        mainContext.shadowColor = 'rgba(0,0,0,0.95)';
+        mainContext.shadowBlur = 8;
         const label = isUsingFireTVRemote
             ? 'D-Pad Move  OK Shoot   \u275A\u275A Pause   \u23EA Grenade   \u23E9 Roll   (hold 3s after death to restart, press at level end to skip)'
             : isUsingGamepad
@@ -606,7 +612,8 @@ engineInit(
         drawRectScreenSpace(pos, enemy.size.scale(20), enemy.color.scale(1,.6));
     }
 
-    if (!enemiesCount && !levelEndTimer.isSet())
+    if (!enemiesCount && !levelEndTimer.isSet() && !pendingApplyArt &&
+        players.length > 0 && players[0] && !players[0].destroyed)
         levelEndTimer.set();
 
     // hudPill / hudText are defined at module scope (above drawNameEntry)
