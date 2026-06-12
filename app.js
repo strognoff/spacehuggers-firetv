@@ -16,7 +16,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.72';
+const APP_VERSION = '1.0.73';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -450,8 +450,12 @@ engineInit(
     // SharedImage mailboxes before we allocate new large ones (prevents Skia
     // OOM → EGL_BAD_PARAMETER → WebGL context loss on level transition).
     // pendingApplyArt counts down 3→1 while we wait, then fires at 0.
+    // Do NOT count down while the GL context is lost — finishLevelSetup()
+    // would bake TileLayers with a dead GL context, producing blank canvases.
     if (pendingApplyArt)
     {
+        if (glContextLost)
+            return;
         if (--pendingApplyArt)
             return;
         finishLevelSetup();

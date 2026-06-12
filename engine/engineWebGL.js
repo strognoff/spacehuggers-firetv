@@ -39,59 +39,16 @@ let glCanvas, glContext, glTileTexture, glShader, glPositionData, glColorData,
     glMatrixUniform, glMatrixBuffer;
 let _currentBlendMode = -1; // tracks active blend mode to skip redundant glFlush calls
 
-function glInit()
+// Re-creates all GL objects that are destroyed on context loss: shader program,
+// VBO, vertex attrib bindings, texture filters, tile texture, and uniform locations.
+// Called both from glInit() (first boot) and from the webglcontextrestored handler.
+function glInitState()
 {
-    if (!glEnable) return;
-
-    glCanvas = document.createElement('canvas');
-
-    // Fire TV: WebGL context loss fires on the WebGL canvas (glCanvas), NOT
-    // on the 2D mainCanvas. Attach the handlers here so they actually fire.
-    glCanvas.addEventListener('webglcontextlost', (e)=>
-    {
-        e.preventDefault(); // required — without this, webglcontextrestored never fires
-        glContextLost = 1;
-        glContextLostTime = performance.now();
-        console.warn('[firetv] WebGL context lost');
-    }, false);
-    glCanvas.addEventListener('webglcontextrestored', ()=>
-    {
-        glContextLost = 0;
-        glContextLostTime = 0;
-        // Amazon WebView can fire webglcontextrestored after GL_UNKNOWN_CONTEXT_RESET_KHR
-        // even though the context is still broken — isContextLost() returns true in that
-        // case. Fall back to Canvas2D permanently rather than uploading into a dead context.
-        if (glEnable && glContext)
-        {
-            if (glContext.isContextLost())
-            {
-                console.warn('[firetv] webglcontextrestored but context still lost, falling back to Canvas2D');
-                glDisable();
-            }
-            else
-            {
-                glTileTexture = glCreateTexture(tileImage);
-                console.log('[firetv] WebGL context restored and healthy');
-            }
-        }
-    }, false);
-
-    // powerPreference:'low-power' tells the driver to use less VRAM and be less
-    // aggressive about keeping allocations resident — reduces OOM pressure on
-    // the Fire TV's embedded GPU.
-    glContext = glCanvas.getContext('webgl', {antialias:!pixelated, powerPreference:'low-power'});
-    if (!glContext) { glDisable(); return; }
+    if (!glEnable || !glContext) return;
 
     glTileTexture = glCreateTexture(tileImage);
     glShrinkTilesX = tileBleedShrinkFix/tileImageSize.x;
     glShrinkTilesY = tileBleedShrinkFix/tileImageSize.y;
-
-    if (glOverlay)
-    {
-        // firefox is much faster without copying the gl buffer so we just overlay it with some tradeoffs
-        document.body.appendChild(glCanvas);
-        glCanvas.style = mainCanvas.style.cssText;
-    }
 
     // setup vertex and fragment shaders
     glShader = glCreateProgram(
@@ -142,9 +99,68 @@ function glInit()
     glContext.texParameteri(gl_TEXTURE_2D, gl_TEXTURE_MIN_FILTER, pixelated ? gl_NEAREST : gl_LINEAR);
     glContext.texParameteri(gl_TEXTURE_2D, gl_TEXTURE_MAG_FILTER, pixelated ? gl_NEAREST : gl_LINEAR);
 
-    // cache the matrix uniform location and pre-allocate the buffer (Fix 4)
+    // cache the matrix uniform location and pre-allocate the buffer
     glMatrixUniform = glContext.getUniformLocation(glShader, 'm');
     glMatrixBuffer  = new Float32Array(16);
+}
+
+function glInit()
+{
+    if (!glEnable) return;
+
+    glCanvas = document.createElement('canvas');
+
+    // Fire TV: WebGL context loss fires on the WebGL canvas (glCanvas), NOT
+    // on the 2D mainCanvas. Attach the handlers here so they actually fire.
+    glCanvas.addEventListener('webglcontextlost', (e)=>
+    {
+        e.preventDefault(); // required — without this, webglcontextrestored never fires
+        glContextLost = 1;
+        glContextLostTime = performance.now();
+        console.warn('[firetv] WebGL context lost');
+    }, false);
+    glCanvas.addEventListener('webglcontextrestored', ()=>
+    {
+        glContextLost = 0;
+        glContextLostTime = 0;
+        // Amazon WebView can fire webglcontextrestored after GL_UNKNOWN_CONTEXT_RESET_KHR
+        // even though the context is still broken — isContextLost() returns true in that
+        // case. Fall back to Canvas2D permanently rather than uploading into a dead context.
+        if (glEnable && glContext)
+        {
+            if (glContext.isContextLost())
+            {
+                console.warn('[firetv] webglcontextrestored but context still lost, falling back to Canvas2D');
+                glDisable();
+            }
+            else
+            {
+                // Re-create ALL GL objects destroyed by the context loss: shader, VBO,
+                // vertex attribs, uniform locations, and tile texture.  Only recreating
+                // the texture (the previous behaviour) left glShader/VBO invalid, which
+                // caused GL errors on the very next glPreRender → immediate second context
+                // loss → eventual Canvas2D fallback and white screen.
+                glInitState();
+                console.log('[firetv] WebGL context restored — full GL state re-initialized');
+            }
+        }
+    }, false);
+
+    // powerPreference:'low-power' tells the driver to use less VRAM and be less
+    // aggressive about keeping allocations resident — reduces OOM pressure on
+    // the Fire TV's embedded GPU.
+    glContext = glCanvas.getContext('webgl', {antialias:!pixelated, powerPreference:'low-power'});
+    if (!glContext) { glDisable(); return; }
+
+    // Initialize all GL state (shader, buffers, attribs, texture).
+    glInitState();
+
+    if (glOverlay)
+    {
+        // firefox is much faster without copying the gl buffer so we just overlay it with some tradeoffs
+        document.body.appendChild(glCanvas);
+        glCanvas.style = mainCanvas.style.cssText;
+    }
 }
 
 function glSetBlendMode(additive)

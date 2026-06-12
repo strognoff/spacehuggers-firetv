@@ -244,6 +244,14 @@ const resetGame=()=>
 {
     levelEndTimer.unset();
     gameTimer.set(totalKills = level = 0);
+
+    // Fire TV: release GPU-backed tile canvases before the new level allocates
+    // its own (up to 82MB each for foreground + background TileLayers).  Without
+    // this the driver holds the previous level's textures in VRAM throughout the
+    // entire death-screen wait, and the subsequent double-allocation triggers
+    // GL_OUT_OF_MEMORY → WebGL context loss → white screen on level restart.
+    tileLayerCanvasCache.forEach(c => { c.width = 1; c.height = 1; });
+    tileLayerCanvasCache.length = 0;
     score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0; levelTimeBonus = 0;
     currentMusicStyle = 0;
     currentMusicStyleName = '';
@@ -775,6 +783,14 @@ function nextLevel()
         ++level;
         levelSeed = randSeed = rand(1e9)|0;
         levelSize = vec2(min(level*99,400),200);
+        // Fire TV / lowGraphicsSettings: cap level dimensions so tile canvases
+        // stay within GPU memory limits. At 16px/tile: 100×100 tiles = 1600×1600
+        // px ≈ 10MB per canvas (fore + back = ~20MB total). Uncapped max
+        // (400×200 tiles) = 6400×3200 ≈ 82MB each → GL_OUT_OF_MEMORY on Fire TV.
+        if (lowGraphicsSettings) {
+            levelSize.x = min(levelSize.x, 100);
+            levelSize.y = min(levelSize.y, 100);
+        }
         levelColor = randColor(new Color(.2,.2,.2), new Color(.8,.8,.8));
         levelSkyColor = randColor(new Color(.5,.5,.5), new Color(.9,.9,.9));
         _skyGradient = null; // invalidate cached sky gradient (rebuilt in appRender)

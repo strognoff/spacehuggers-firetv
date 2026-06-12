@@ -157,6 +157,18 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
                 glDisable();
                 glContextLost = 0;
                 glContextLostTime = 0;
+                // The TileLayer canvases were baked while the GL context was dying and
+                // may be blank/garbage. Now that glEnable=0, redraw() uses Canvas2D.
+                // Defer 500ms so the GPU driver finishes tearing down the lost EGL
+                // context before Canvas2D allocates new GPU-backed canvas textures —
+                // calling redraw() immediately triggers a second GL_OUT_OF_MEMORY burst
+                // as Skia tries to upload the (still too large) canvas to the GPU.
+                setTimeout(() => {
+                    if (typeof tileLayer !== 'undefined' && tileLayer && !tileLayer.destroyed)
+                        tileLayer.redraw();
+                    if (typeof tileBackgroundLayer !== 'undefined' && tileBackgroundLayer && !tileBackgroundLayer.destroyed)
+                        tileBackgroundLayer.redraw();
+                }, 500);
             }
             else
             {

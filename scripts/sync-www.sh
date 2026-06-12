@@ -29,6 +29,7 @@ FILE_PAIRS=(
   "appObjects.js:appObjects.js"
   "appEffects.js:appEffects.js"
   "engine/engine.js:engine/engine.js"
+  "engine/engineWebGL.js:engine/engineWebGL.js"
 )
 
 CHECK_ONLY=0
