@@ -655,8 +655,19 @@ function makeTileLayers(level_)
             tileBackgroundLayer.setData(pos, new TileLayerData(tileIndex, direction, mirror, color.scale(.4,1)));
         }
     }
+    // Always bake tile layers via Canvas2D to avoid GL_UNKNOWN_CONTEXT_RESET_KHR
+    // on Fire TV. When glEnable=1, redrawStart() calls glPreRender(w, h) which
+    // resizes glCanvas to the full tile canvas dimensions — this canvas resize
+    // triggers a GPU driver watchdog reset on this hardware even at capped sizes.
+    // Setting glEnable=0 during baking forces the Canvas2D path (drawCanvas2D
+    // with tileImage), which produces identical tile output without touching the
+    // WebGL canvas at all. Restored immediately after so sprites/effects still
+    // use WebGL for the rest of the frame.
+    const _savedGlEnable = glEnable;
+    glEnable = 0;
     tileLayer.redraw();
     tileBackgroundLayer.redraw();
+    glEnable = _savedGlEnable;
 }
 
 function applyArtToLevel()
