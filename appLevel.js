@@ -225,6 +225,11 @@ let pendingNextLevelResume = 0;
 // Skia OOM → EGL_BAD_PARAMETER → WebGL context loss). One frame (16ms) was
 // not enough; empirically 3 frames clears the mailbox backlog.
 let pendingApplyArt = 0;
+// Fire TV: set by resetGame() so nextLevel() uses a longer pendingApplyArt
+// delay (5 frames instead of 3). After a full game-over the GPU has been
+// holding the entire level's tile textures in VRAM for the duration of the
+// death-screen wait, so it needs more time to drain them.
+let pendingApplyArtIsReset = false;
 
 let tileBackground;
 const setTileBackgroundData = (pos, data=0)=>
@@ -242,6 +247,11 @@ const resetGame=()=>
     score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0; levelTimeBonus = 0;
     currentMusicStyle = 0;
     currentMusicStyleName = '';
+    // Fire TV: signal nextLevel() to use an extended GPU drain delay.
+    // After a full game-over the GPU has been holding the entire previous
+    // level's tile textures in VRAM throughout the death-screen wait, so
+    // 3 frames is not enough — use 5 frames (~83ms) instead.
+    pendingApplyArtIsReset = true;
     nextLevel(playerLives = 3);
 }
 
@@ -785,11 +795,14 @@ function nextLevel()
         }
     }
 
-    // Phase 2 is deferred 3 frames (pendingApplyArt counts down 3→0) so the
-    // GPU can release the old TileLayer canvas SharedImage mailboxes before we
-    // allocate new large ones. Without this yield, Skia runs out of GPU memory
-    // → EGL_BAD_PARAMETER → WebGL context loss on Fire TV.
-    // One frame (16ms) was empirically insufficient; 3 frames (~50ms) clears
-    // the backlog on the Amazon WebView Chromium GPU process.
-    pendingApplyArt = 3;
+    // Phase 2 is deferred so the GPU can release the old TileLayer canvas
+    // SharedImage mailboxes before we allocate new large ones. Without this
+    // yield, Skia runs out of GPU memory → EGL_BAD_PARAMETER → WebGL context
+    // loss on Fire TV. One frame (16ms) was empirically insufficient; 3 frames
+    // (~50ms) clears the backlog on normal level transitions. On a full game
+    // restart (pendingApplyArtIsReset) the GPU has held the previous level's
+    // textures throughout the entire death-screen wait, so we use 5 frames
+    // (~83ms) to give it extra time to drain.
+    pendingApplyArt = pendingApplyArtIsReset ? 5 : 3;
+    pendingApplyArtIsReset = false;
 }

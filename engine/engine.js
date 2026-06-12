@@ -57,7 +57,8 @@ const consumeTapFire = ()=> { const v = tapFireRequested; tapFireRequested = 0; 
 const togglePause    = ()=> { paused = !paused; if (paused) clearInput(); };
 let cameraPos=vec2(), cameraScale=4*max(defaultTileSize.x, defaultTileSize.y);
 let tileImageSize, tileImageSizeInverse, shrinkTilesX, shrinkTilesY, drawCount;
-let glContextLost = 0; // set when the WebGL context is lost, cleared on restore
+let glContextLost = 0;     // set when the WebGL context is lost, cleared on restore
+let glContextLostTime = 0; // timestamp (ms) when context was lost, for unrecoverable-reset timeout
 
 const tileImage = new Image(); // the tile image used by everything
 function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
@@ -87,13 +88,17 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         {
             e.preventDefault();
             glContextLost = 1;
+            glContextLostTime = performance.now();
+            console.warn('[firetv] WebGL context lost');
         }, false);
         mainCanvas.addEventListener('webglcontextrestored', ()=>
         {
             glContextLost = 0;
+            glContextLostTime = 0;
             // tile texture was lost; rebuild it
             if (glEnable && glContext)
                 glTileTexture = glCreateTexture(tileImage);
+            console.log('[firetv] WebGL context restored');
         }, false);
 
         // TEMP DEBUG: confirms the engine JS is running on the device. If
@@ -164,9 +169,23 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         // keep allocating textures the GPU can't accept.
         if (glContextLost)
         {
-            mainContext.fillStyle = '#000';
-            mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
-            return;
+            // Fire TV: GL_UNKNOWN_CONTEXT_RESET_KHR (GPU robustness reset) kills
+            // the GPU process and never fires webglcontextrestored. After 2 seconds
+            // with no restore, treat the context as unrecoverable and permanently
+            // fall back to Canvas2D so the game keeps running.
+            if (performance.now() - glContextLostTime > 2000)
+            {
+                console.warn('[firetv] WebGL context unrecoverable, falling back to Canvas2D');
+                glDisable();
+                glContextLost = 0;
+                glContextLostTime = 0;
+            }
+            else
+            {
+                mainContext.fillStyle = '#000';
+                mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+                return;
+            }
         }
 
         // update frame
