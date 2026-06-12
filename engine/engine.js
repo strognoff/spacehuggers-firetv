@@ -95,10 +95,24 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         {
             glContextLost = 0;
             glContextLostTime = 0;
-            // tile texture was lost; rebuild it
+            // Verify the context is actually usable before resuming WebGL mode.
+            // Amazon WebView can fire webglcontextrestored after a
+            // GL_UNKNOWN_CONTEXT_RESET_KHR even though the context is still
+            // lost — isContextLost() returns true in that case. Treat it as
+            // unrecoverable and fall back to Canvas2D permanently.
             if (glEnable && glContext)
-                glTileTexture = glCreateTexture(tileImage);
-            console.log('[firetv] WebGL context restored');
+            {
+                if (glContext.isContextLost())
+                {
+                    console.warn('[firetv] webglcontextrestored but context still lost, falling back to Canvas2D');
+                    glDisable();
+                }
+                else
+                {
+                    glTileTexture = glCreateTexture(tileImage);
+                    console.log('[firetv] WebGL context restored and healthy');
+                }
+            }
         }, false);
 
         // TEMP DEBUG: confirms the engine JS is running on the device. If
