@@ -150,10 +150,12 @@ function glInit()
     // aggressive about keeping allocations resident — reduces OOM pressure on
     // the Fire TV's embedded GPU.
     glContext = glCanvas.getContext('webgl', {antialias:!pixelated, powerPreference:'low-power'});
-    if (!glContext) { glDisable(); return; }
+    if (!glContext) { console.warn('[firetv-gl] getContext("webgl") returned null — falling back to Canvas2D'); glDisable(); return; }
+    console.log('[firetv-gl] WebGL context created, isLost=' + glContext.isContextLost());
 
     // Initialize all GL state (shader, buffers, attribs, texture).
     glInitState();
+    console.log('[firetv-gl] glInitState() complete');
 
     if (glOverlay)
     {
@@ -242,6 +244,8 @@ function glPreRender(width, height)
     if (!glEnable) return;
 
     // clear and set to same size as main canvas
+    if (glCanvas.width !== width || glCanvas.height !== height)
+        console.log('[firetv-gl] glPreRender resize: ' + glCanvas.width + 'x' + glCanvas.height + ' -> ' + width + 'x' + height);
     glCanvas.width = width;
     glCanvas.height = height;
     glContext.viewport(0, 0, width, height);

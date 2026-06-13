@@ -17,13 +17,184 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.86';
+const APP_VERSION = '1.0.95';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
 let cameraShake = 0;
 let pauseMenuOption  = 0;     // 0=Resume 1=Music 2=Restart 3=About
 let pauseAboutScreen = false; // shows about overlay within pause
+
+// IMPROVEMENT 1.1: "area clear" gate — BonusBox only ends the level after
+// all enemies are dead. Set in appRenderPost once per frame, read by
+// BonusBox.collideWithObject to decide whether the box is "armed".
+let areaClear = 0;
+
+// IMPROVEMENT 1.2: secondary objective types. HUNT is the default
+// (clear all enemies, then break the box — the areaClear flag). SURVIVE
+// keeps the box locked until the survival timer expires. COLLECT locks
+// the box until 3 stashes are gathered. Each level picks one.
+const OBJECTIVE_HUNT    = 0;  // areaClear = no enemies left
+const OBJECTIVE_SURVIVE = 1;  // areaClear = survive timer elapsed
+const OBJECTIVE_COLLECT = 2;  // areaClear = all stashes collected
+let objectiveType = OBJECTIVE_HUNT;
+let surviveTimer = 0;          // counts down while playing
+let surviveGoal  = 30;          // seconds to survive
+let stashesRequired = 3;        // number of stashes to collect
+let stashesCollected = 0;
+
+// IMPROVEMENT 1.3: a reference to the live BonusBox so we can draw an
+// off-screen direction arrow at the screen edge. Set by BonusBox on
+// creation, cleared on destroy.
+let bonusBoxRef = null;
+
+// IMPROVEMENT 2.2: 2-frame hit-pause. When > 0, appUpdate short-circuits so
+// the world "freezes" briefly after the player takes damage. The engine's
+// physics tick still runs but per-frame input is skipped, giving the
+// classic "ouch" beat.
+let hitPauseFrames = 0;
+
+// IMPROVEMENT 2.3: friendly name of whatever killed the player on the
+// current life. Set in Player.damage when a lethal hit lands, read by
+// the GAME OVER panel.
+let lastKillerName = '';
+
+// IMPROVEMENT 4.2: per-level personal best time, stored in localStorage
+// keyed by level number. On level clear, beats the saved best → flash
+// "NEW BEST" indicator and persist the new record.
+const LB_KEY = 'spacehuggers.levelbests';
+let levelBestTime = 0;     // seconds, 0 = no record
+let newBestFlag = 0;       // set to 1 when the current run beat the record
+
+// IMPROVEMENT 4.4: "LEVEL N" title card shown for 1.5s at the start of
+// each level. Decremented in appUpdate; rendered in appRenderPost.
+let levelTitleTimer = 0;
+let levelTitleObjective = '';   // human-readable objective hint
+
+// IMPROVEMENT 6.1: 3-step tutorial overlay shown on the very first run.
+// Persisted in localStorage so the user only sees it once. Each step
+// is shown for ~3.5s before the next one auto-advances.
+const TUT_KEY = 'spacehuggers.tutorialDone';
+const TUT_STEPS = [
+    [ '← →  Move      ↑  Jump',                                 'Use the D-Pad to move. Up to jump.' ],
+    [ 'Z  Shoot   X  Roll   C  Grenade',                        'Shoot enemies, roll through bullets, throw grenades.' ],
+    [ 'Find and shoot the glowing box to clear the level',       'Clear all enemies first — then the box will open.' ],
+];
+let tutStep = -1;          // -1 = inactive, 0..2 = current step
+let tutStepTime = 0;       // seconds remaining on the current step
+let tutActive = 0;         // 1 while the tutorial is visible
+const isTutorialDone = ()=>
+{
+    try { return localStorage.getItem(TUT_KEY) === '1' ? 1 : 0; }
+    catch (e) { return 0; }
+};
+const startTutorial = ()=>
+{
+    if (isTutorialDone()) return;
+    tutStep = 0;
+    tutStepTime = 3.5;
+    tutActive = 1;
+};
+const advanceTutorial = ()=>
+{
+    ++tutStep;
+    if (tutStep >= TUT_STEPS.length)
+    {
+        tutActive = 0;
+        tutStep = -1;
+        try { localStorage.setItem(TUT_KEY, '1'); } catch (e) {}
+    }
+    else
+        tutStepTime = 3.5;
+};
+const loadLevelBests = ()=>
+{
+    try
+    {
+        const raw = localStorage.getItem(LB_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object') ? parsed : {};
+    }
+    catch (e) { return {}; }
+};
+const saveLevelBests = (b)=>
+{
+    try { localStorage.setItem(LB_KEY, JSON.stringify(b)); }
+    catch (e) { /* best-effort */ }
+};
+
+// IMPROVEMENT 3.3: kill streak / combo counter. Increments on each enemy
+// kill, resets on player damage. Surfaces a 1.5s floating "x3 STREAK!"
+// banner when crossing thresholds (3, 5, 10). The banner float-up uses
+// a free-floating `hudText` decoupled from world position.
+let streakCount = 0;
+let streakTimer = 0;
+let streakBannerText = '';
+let streakBannerTime = 0;
+
+// IMPROVEMENT 5.1: per-weapon stats (bullets fired, hits, kills, damage
+// dealt) accumulated across the current run. Indexed by weaponType
+// (0=pistol, 1=shotgun, 2=plasma). Reset in resetGame.
+const weaponStats = [
+    { fired: 0, hits: 0, kills: 0, damage: 0 },
+    { fired: 0, hits: 0, kills: 0, damage: 0 },
+    { fired: 0, hits: 0, kills: 0, damage: 0 },
+];
+let pauseStatsScreen = false;  // sub-screen flag for the STATS overlay
+
+// IMPROVEMENT 5.4: Achievements. Each entry has a stable key, a friendly
+// label, a description, and a check function (called on relevant events).
+// Unlocked IDs are stored in localStorage so they persist across runs.
+const ACH_KEY = 'spacehuggers.achievements';
+const ACHIEVEMENTS = [
+    { id: 'first_blood', name: 'First Blood',   desc: 'Kill your first enemy.' },
+    { id: 'combo_5',     name: 'Combo Breaker', desc: 'Reach a 5-kill streak.' },
+    { id: 'combo_10',    name: 'Unstoppable',   desc: 'Reach a 10-kill streak.' },
+    { id: 'boxed_10',    name: 'Boxed Up',      desc: 'Break 10 bonus boxes.' },
+    { id: 'speed_demon', name: 'Speed Demon',   desc: 'Clear a level in under 30 seconds.' },
+    { id: 'boss_slayer', name: 'Boss Slayer',   desc: 'Defeat a level boss.' },
+    { id: 'fireproof',   name: 'Fireproof',     desc: 'Survive being on fire without dying.' },
+    { id: 'marathon',    name: 'Marathon',      desc: 'Reach level 20.' },
+];
+const unlockedAchievements = (()=>
+{
+    try
+    {
+        const raw = localStorage.getItem(ACH_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object') ? parsed : {};
+    }
+    catch (e) { return {}; }
+})();
+const saveAchievements = ()=>
+{
+    try { localStorage.setItem(ACH_KEY, JSON.stringify(unlockedAchievements)); }
+    catch (e) { /* best-effort */ }
+};
+const unlockAchievement = (id, name)=>
+{
+    if (unlockedAchievements[id]) return 0;
+    unlockedAchievements[id] = Date.now();
+    saveAchievements();
+    achievementToastName = name;
+    achievementToastTime = 3;
+    return 1;
+};
+let pauseAchScreen   = false;
+let achievementToastName = '';
+let achievementToastTime = 0;
+let bonusBoxBreakCount = 0;     // tally for the "boxed up" achievement
+
+// IMPROVEMENT 6.5: floating "+100" damage popups. Bounded array of small
+// text/position records spawned on enemy kill. Decayed in appUpdate, drawn
+// in appRenderPost using world-to-screen coords. Each popup is one record.
+const _killPopups = [];         // { pos:Vector2, value:number, time:number, lifetime:number, color:Color }
+const spawnKillPopup = (pos, value, color)=>
+{
+    _killPopups.push({ pos: pos.copy(), value: value, time: 0.8, lifetime: 0.8, color: color || '#ffb347' });
+};
 
 // ── High score / scoreboard state ────────────────────────────────────────────
 // Persisted top-10 list. Stored as JSON in localStorage under one key. The
@@ -65,9 +236,46 @@ const qualifiesForHighScore = (score, list)=>
 const addHighScore = (name, score, level)=>
 {
     const list = loadHighScores();
-    list.push({ name: name || 'AAA', score: score|0, level: level|0, date: Date.now() });
+    // IMPROVEMENT 5.2: tag the entry with whether it was a daily run, so the
+    // scoreboard can flag "DAILY" scores separately.
+    list.push({ name: name || 'AAA', score: score|0, level: level|0, date: Date.now(),
+                daily: isDailyMode() ? 1 : 0 });
     list.sort((a,b)=> b.score - a.score);
     saveHighScores(list.slice(0, HS_MAX));
+};
+
+// Shared restart path for modal UI flows (GAME OVER / name entry). Unlike the
+// pause-menu restart, these confirmations happen while the death overlay is
+// still being rendered, so restarting immediately in the same frame can race
+// the Fire TV WebGL fallback path and leave the app on a white screen. Clear
+// the consumed input now, then defer resetGame() to the next animation frame.
+let restartQueued = false;
+const queueGameRestart = ()=>
+{
+    if (restartQueued)
+        return;
+
+    restartQueued            = true;
+    nameEntryActive          = false;
+    nameEntryBuffer          = '';
+    pauseAboutScreen         = false;
+    pauseScoreboardScreen    = false;
+    _cachedHighScores        = null;
+    clearInput();
+
+    requestAnimationFrame(() =>
+    {
+        // Fire TV / Canvas2D fallback: paint a solid black frame before
+        // resetGame() destroys the tile layers. This prevents the one-frame
+        // window where the sky gradient has been nulled but the new
+        // pendingApplyArt guard hasn't activated yet, which otherwise
+        // renders as a white screen on the Canvas2D fallback path.
+        mainContext.fillStyle = '#000';
+        mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+        _skyGradient = null; // invalidate here, after the black frame is painted
+        restartQueued = false;
+        resetGame();
+    });
 };
 
 // ── On-screen keyboard for name entry ────────────────────────────────────────
@@ -139,13 +347,8 @@ const updateNameEntry = ()=>
         if (wasAlreadyFull && nameEntryBuffer.length >= 3)
         {
             addHighScore(nameEntryBuffer, nameEntryFinalScore, nameEntryFinalLevel);
-            _cachedHighScores = null; // force cache refresh next time scoreboard opens
-            nameEntryActive       = false;
-            nameEntryBuffer       = '';
-            pauseAboutScreen      = false;
-            pauseScoreboardScreen = false;
-            _skyGradient          = null; // force sky gradient rebuild for the new level
-            resetGame();
+            queueGameRestart();
+            return;
         }
         clearInput();
     }
@@ -306,6 +509,12 @@ const drawNameEntry = ()=>
             cx, cy + 200, 14, 'rgba(140,140,170,0.8)', 'center');
 };
 
+// IMPROVEMENT 6.3: track whether the user explicitly paused (Play/Pause
+// button, P key) so the engine's `window.onfocus = ()=> paused = 0`
+// doesn't auto-unpause the game when the user clicks back. The override
+// is installed in a microtask after the engine's own onfocus handler.
+let userExplicitlyPaused = 0;
+
 // FIX 1.5: Cache window-size Vector2 allocations — recompute only when canvas or scale changes
 let _lastCanvasW = 0, _lastCanvasH = 0, _lastCamScale = 0;
 // FIX 2.6: Cache sky LinearGradient — recreate only when canvas height changes
@@ -320,15 +529,51 @@ let _hudHintLabelMode = 0;
 engineInit(
 
 ///////////////////////////////////////////////////////////////////////////////
-()=> // appInit 
+()=> // appInit
 {
     resetGame();
     cameraScale = startCameraScale;
+    // IMPROVEMENT 4.4: show the level title card immediately on first level.
+    levelTitleTimer = 1.5;
+    // IMPROVEMENT 1.2: set the initial objective (HUNT is the default for
+    // level 1; later levels pick randomly in nextLevel).
+    objectiveType = OBJECTIVE_HUNT;
+    levelTitleObjective = 'CLEAR ALL ENEMIES — THEN BREAK THE BOX';
+    // IMPROVEMENT 6.1: kick off the first-run tutorial (no-op on subsequent runs).
+    startTutorial();
+
+    // IMPROVEMENT 6.3: install a guard on the engine's window.onfocus so
+    // the auto-unpause doesn't fire when the user explicitly paused. Done
+    // in a setTimeout(0) so it runs AFTER the engine's own onfocus handler
+    // inside tileImage.onload (which is what clobbers our override).
+    setTimeout(()=> {
+        window.onfocus = ()=> { if (!userExplicitlyPaused) paused = 0; };
+    }, 0);
+
+    // IMPROVEMENT 6.3: capture phase 2 listener (runs after the engine's
+    // togglePause) that mirrors the user's explicit pause state into our
+    // flag. Engine sets togglePause for keys 179 (Fire TV Play/Pause) and
+    // 80 (P) — we set the flag after those run.
+    window.addEventListener('keydown', (e)=>
+    {
+        if (e.keyCode === 179 || e.keyCode === 80)
+            setTimeout(()=> { userExplicitlyPaused = paused; }, 0);
+    }, false);
 },
 
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appUpdate
 {
+    // IMPROVEMENT 2.2: short hit-pause after the player takes damage. We
+    // skip this frame's input processing but still let the engine tick
+    // physics / render — gives a 2-frame "ouch" beat without desyncing
+    // the world simulation.
+    if (hitPauseFrames > 0)
+    {
+        --hitPauseFrames;
+        return;
+    }
+
     // If the on-screen name-entry keyboard is up, it owns all input until the
     // name is confirmed. Run it first so it can clearInput() and prevent the
     // restart trigger / player movement from also firing this frame. We still
@@ -411,6 +656,38 @@ engineInit(
     for(const player of players)
         minDeadTime = min(minDeadTime, player && player.isDead() ? player.deadTimer.get() : 0);
 
+    // IMPROVEMENT 3.3: kill-streak decay. If the player goes 4 seconds
+    // without a kill, the streak resets. The banner fades in appRenderPost.
+    if (streakTimer > 0)
+    {
+        streakTimer -= timeDelta;
+        if (streakTimer <= 0)
+            streakCount = 0;
+    }
+    if (streakBannerTime > 0)
+        streakBannerTime = max(0, streakBannerTime - timeDelta);
+
+    // IMPROVEMENT 4.4: countdown the level title card so it auto-fades.
+    if (levelTitleTimer > 0)
+        levelTitleTimer = max(0, levelTitleTimer - timeDelta);
+
+    // IMPROVEMENT 1.2: SURVIVE objective timer. Counts down each frame
+    // while the player is alive and the level hasn't ended.
+    if (objectiveType === OBJECTIVE_SURVIVE && surviveTimer > 0
+        && players[0] && !players[0].isDead() && !levelEndTimer.isSet())
+    {
+        surviveTimer = max(0, surviveTimer - timeDelta);
+    }
+
+    // IMPROVEMENT 6.1: tutorial step timer. Each step auto-advances after
+    // ~3.5s; the last step marks the tutorial as done in localStorage.
+    if (tutActive)
+    {
+        tutStepTime -= timeDelta;
+        if (tutStepTime <= 0)
+            advanceTutorial();
+    }
+
     // Fire TV: also accept OK (raw 13) and the tap-fire mapped key (91)
     // as restart triggers, since on the remote the user has no Z/Space/GpadA.
     // Skip the restart while the name-entry keyboard is up — it owns OK input.
@@ -431,11 +708,8 @@ engineInit(
         }
         else
         {
-            nameEntryActive       = false;
-            nameEntryBuffer       = '';
-            pauseAboutScreen      = false;
-            pauseScoreboardScreen = false;
-            resetGame();
+            queueGameRestart();
+            return;
         }
     }
 
@@ -611,6 +885,72 @@ engineInit(
         mainContext.fillText(_hudHintLabel, 16, h - 36);
         mainContext.restore();
     }
+
+    // IMPROVEMENT 1.3: draw an off-screen direction arrow toward the BonusBox
+    // when the player is too far away. Pure screen-space draw — 3 rects, zero
+    // object allocations, no per-frame cost when the box is on-screen.
+    if (bonusBoxRef && !bonusBoxRef.destroyed && players[0] && !players[0].destroyed)
+    {
+        const box = bonusBoxRef;
+        const p   = players[0];
+        const dx  = box.pos.x - p.pos.x;
+        const dy  = box.pos.y - p.pos.y;
+        const dist = Math.hypot(dx, dy);
+        // Only show the arrow beyond 22 world units (the box already has its
+        // own pulsing beacon when you're close).
+        if (dist > 22)
+        {
+            // Project box position into screen space; if it's on-screen, skip.
+            const screenBox = worldToScreen(box.pos);
+            const onScreen = screenBox.x > 40 && screenBox.x < mainCanvas.width - 40
+                          && screenBox.y > 40 && screenBox.y < mainCanvas.height - 40;
+            if (!onScreen)
+            {
+                // Clamp arrow to canvas edge along the line from screen-center to box.
+                const cx = mainCanvas.width / 2;
+                const cy = mainCanvas.height / 2;
+                const ang = Math.atan2(screenBox.y - cy, screenBox.x - cx);
+                const margin = 60;
+                const maxX = cx - margin;
+                const maxY = cy - margin;
+                // Find intersection of the ray (cx,cy) + t*(cos,sin) with the
+                // smaller of the horizontal/vertical bounds.
+                const tX = ang !== 0 ? Math.abs(maxX / Math.cos(ang)) : 1e9;
+                const tY = ang !== 0 ? Math.abs(maxY / Math.sin(ang)) : 1e9;
+                const t = Math.min(tX, tY, 1e9) * .92;
+                const ax = cx + Math.cos(ang) * t;
+                const ay = cy + Math.sin(ang) * t;
+                const pulse = .6 + .4 * Math.sin(time * 4);
+
+                mainContext.save();
+                mainContext.translate(ax, ay);
+                mainContext.rotate(ang);
+                mainContext.fillStyle = `rgba(255, 224, 102, ${pulse})`;
+                mainContext.shadowColor = 'rgba(255, 224, 102, 0.9)';
+                mainContext.shadowBlur = 10;
+                // Triangle pointing along +X (right) — rotation aligns it to the box.
+                mainContext.beginPath();
+                mainContext.moveTo(18, 0);
+                mainContext.lineTo(-8, -12);
+                mainContext.lineTo(-2, 0);
+                mainContext.lineTo(-8, 12);
+                mainContext.closePath();
+                mainContext.fill();
+                mainContext.restore();
+
+                // "BOX" label below the arrow.
+                mainContext.save();
+                mainContext.font = 'bold 16px impact';
+                mainContext.textAlign = 'center';
+                mainContext.textBaseline = 'middle';
+                mainContext.fillStyle = `rgba(255, 224, 102, ${pulse})`;
+                mainContext.shadowColor = 'rgba(0,0,0,0.95)';
+                mainContext.shadowBlur = 6;
+                mainContext.fillText('BOX', ax, ay + 26);
+                mainContext.restore();
+            }
+        }
+    }
 },
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -634,13 +974,40 @@ engineInit(
             continue;
 
         ++enemiesCount;
+        // IMPROVEMENT 4.3: indicators are now enemy-type-aware. Size scales
+        // with threat (weak = small, elite = large + pulsing ring). Color
+        // still comes from the enemy's own color tint.
+        const t = enemy.type || 0;
+        const threat = t === 3 ? 1.6 : t >= 2 ? 1.3 : t === 4 ? 1.25 : 1;
         const pos = vec2(mainCanvas.width/2 + (enemy.pos.x - cameraPos.x)*30,mainCanvas.height-20);
-        drawRectScreenSpace(pos, enemy.size.scale(20), enemy.color.scale(1,.6));
+        drawRectScreenSpace(pos, enemy.size.scale(20 * threat), enemy.color.scale(1, .6));
+        if (t === 3) // elite — pulsing red ring around indicator
+        {
+            const ringPulse = .5 + .5 * Math.sin(time * 6);
+            drawRectScreenSpace(pos, vec2(20 * (threat + .4 + ringPulse * .25)),
+                new Color(1, .2, .2, .25 + ringPulse * .35));
+        }
     }
 
+    // IMPROVEMENT 1.1: do NOT auto-end the level when all enemies die. The
+    // BonusBox is the finale — it's gated on `areaClear` below. We still want
+    // to track the "all enemies dead" state for the HUD ("AREA CLEAR" text) and
+    // for the BonusBox gate, so we expose it as a module flag.
+    // IMPROVEMENT 1.2: the areaClear condition depends on the level's
+    // objective type (HUNT / SURVIVE / COLLECT). The survive timer and
+    // stash tally are also updated here.
+    let _areaClear = 0;
     if (!enemiesCount && !levelEndTimer.isSet() && !pendingApplyArt &&
         players.length > 0 && players[0] && !players[0].destroyed)
-        levelEndTimer.set();
+    {
+        if (objectiveType === OBJECTIVE_HUNT)
+            _areaClear = 1;
+        else if (objectiveType === OBJECTIVE_SURVIVE)
+            _areaClear = surviveTimer <= 0 ? 1 : 0;
+        else if (objectiveType === OBJECTIVE_COLLECT)
+            _areaClear = stashesCollected >= stashesRequired ? 1 : 0;
+    }
+    areaClear = _areaClear;
 
     // hudPill / hudText are defined at module scope (above drawNameEntry)
 
@@ -687,26 +1054,91 @@ engineInit(
     drawHudPanel(pad, pad, 240, 'SCORE', totalScore, '#ffb347');
 
     // ── Level panel — top center ──────────────────────────────────────────────
-    drawHudPanel(cw/2 - 90, pad, 180, 'LEVEL', level, '#7fdbff', 'center');
+    // IMPROVEMENT 5.2: add a small "DAILY" badge when the run is in daily mode.
+    {
+        const lvlLabel = isDailyMode() ? ('LEVEL ' + level + ' \u2605DAILY') : 'LEVEL';
+        drawHudPanel(cw/2 - 90, pad, 180, lvlLabel, level, isDailyMode() ? '#ffe066' : '#7fdbff', 'center');
+    }
 
     // ── Lives panel — top right ───────────────────────────────────────────────
     drawHudPanel(cw - pad - 170, pad, 170, 'LIVES', Math.max(0, playerLives), '#ff5050', 'right');
 
     // ── Threats panel — bottom center ─────────────────────────────────────────
-    const threatsValue = enemiesCount > 0 ? enemiesCount + ' REMAINING' : 'AREA CLEAR';
-    const threatsColor = enemiesCount > 0 ? '#7fff7f' : '#ffb347';
-    drawHudPanel(cw/2 - 140, ch - pad - frameH, 280, 'THREATS', threatsValue, threatsColor, 'center');
+    // IMPROVEMENT 1.2: show the active objective's progress instead of (or
+    // alongside) the enemy count, depending on the objective type.
+    let threatsLabel = 'THREATS', threatsValue = '', threatsColor = '#ffb347';
+    if (objectiveType === OBJECTIVE_HUNT)
+    {
+        threatsValue = enemiesCount > 0 ? enemiesCount + ' REMAINING' : (areaClear ? 'AREA CLEAR' : 'CLEAR THEM ALL');
+        threatsColor = enemiesCount > 0 ? '#7fff7f' : (areaClear ? '#ffe066' : '#ff5050');
+    }
+    else if (objectiveType === OBJECTIVE_SURVIVE)
+    {
+        threatsValue = surviveTimer > 0 ? (surviveTimer | 0) + 's LEFT' : 'SURVIVED!';
+        threatsColor = surviveTimer > 0 ? '#ff5050' : '#7fff7f';
+    }
+    else if (objectiveType === OBJECTIVE_COLLECT)
+    {
+        threatsValue = stashesCollected + ' / ' + stashesRequired + ' STASHES';
+        threatsColor = stashesCollected >= stashesRequired ? '#7fff7f' : '#7fdbff';
+    }
+    drawHudPanel(cw/2 - 140, ch - pad - frameH, 280, threatsLabel, threatsValue, threatsColor, 'center');
+
+    // IMPROVEMENT 4.1: weapon indicator — shows current weapon below the
+    // LIVES panel. Pistol = white, Shotgun = orange, Plasma = cyan.
+    if (players[0] && players[0].weapon)
+    {
+        const wpn = players[0].weapon;
+        const wx = cw - pad - 170;
+        const wy = pad + frameH + 8;          // right side, below LIVES
+        const wpnColor = wpn.weaponType === 2 ? '#0ff'
+                       : wpn.weaponType === 1 ? '#f80'
+                                                : '#fff';
+        const wpnName  = wpn.weaponType === 2 ? 'PLASMA'
+                       : wpn.weaponType === 1 ? 'SHOTGUN'
+                                                : 'PISTOL';
+        drawHudPanel(wx, wy, 170, 'WEAPON', wpnName, wpnColor, 'right');
+    }
 
     // ── Kills panel — bottom left (during play) ───────────────────────────────
     if (levelKills > 0)
         drawHudPanel(pad, ch - pad - frameH, 220, 'KILLS', levelKills + '  +' + levelScore, '#ffffff');
+
+    // IMPROVEMENT 4.5: small "Checkpoint X / Y" indicator below the KILLS
+    // panel. Counts the live Checkpoint objects in engineObjects each frame
+    // (typical count is 3-5, so the cost is trivial).
+    {
+        let ckTotal = 0, ckIndex = 0;
+        for (const o of engineObjects) {
+            if (o && o.isCheckpoint) {
+                ++ckTotal;
+                if (o === activeCheckpoint) ckIndex = ckTotal;
+            }
+        }
+        if (ckTotal > 0)
+        {
+            const lbl = ckIndex > 0 ? ('CHECKPOINT ' + ckIndex + ' / ' + ckTotal) : 'CHECKPOINT — / ' + ckTotal;
+            const val = ckIndex > 0 ? ('#' + ckIndex) : 'not yet';
+            const c   = ckIndex > 0 ? '#7fdbff' : 'rgba(140,140,170,0.7)';
+            drawHudPanel(pad, ch - pad - frameH - 70, 220, lbl, val, c);
+        }
+    }
 
     // ── Time panel — bottom right (during play, mirrors KILLS) ───────────────
     if (!levelEndTimer.isSet()) {
         const elapsed = Math.max(0, time - levelStartTime) | 0;
         const mm = (elapsed / 60) | 0;
         const ss = String(elapsed % 60).padStart(2, '0');
-        drawHudPanel(cw - pad - 180, ch - pad - frameH, 180, 'TIME', mm + ':' + ss, '#7fdbff', 'right');
+        // IMPROVEMENT 4.2: show current time / personal best together.
+        // "NEW BEST" pulses for 2s when the player beats their record.
+        const newBestPulse = newBestFlag > 0 ? .5 + .5 * Math.sin(time * 6) : 0;
+        const value = newBestFlag > 0
+            ? mm + ':' + ss + '   NEW BEST'
+            : mm + ':' + ss + (levelBestTime > 0 ? '  /  ' + ((levelBestTime / 60) | 0) + ':' + String((levelBestTime | 0) % 60).padStart(2, '0') : '');
+        drawHudPanel(cw - pad - 180, ch - pad - frameH, 180, 'TIME', value,
+                     newBestFlag > 0 ? `rgba(255, 224, 102, ${newBestPulse})` : '#7fdbff', 'right');
+        if (newBestFlag > 0)
+            newBestFlag = max(0, newBestFlag - timeDelta * 0.5); // ~2s flash
     }
 
     // ── LEVEL CLEAR overlay panel — stays until player presses OK ────────────
@@ -744,21 +1176,34 @@ engineInit(
     const fade = levelEndTimer.isSet() ? 0 : percent(levelTimer.get(), .5, 2);
     drawRect(cameraPos, vec2(1e3), new Color(0,0,0,fade))
 
+    // IMPROVEMENT 5.4: decay the achievement unlock toast.
+    if (achievementToastTime > 0)
+        achievementToastTime = max(0, achievementToastTime - timeDelta);
+
+    // IMPROVEMENT 6.5: decay kill popups (rises 0.6 units, fades over 0.8s).
+    for (let i = _killPopups.length - 1; i >= 0; --i)
+    {
+        _killPopups[i].time -= timeDelta;
+        if (_killPopups[i].time <= 0)
+            _killPopups.splice(i, 1);
+    }
+
     // ── Pause menu ────────────────────────────────────────────────────────────
     if (paused)
     {
-        const MENU_ITEMS = 5;
+        const MENU_ITEMS = 7;  // IMPROVEMENT 5.1 + 5.4: STATS and ACHIEVEMENTS sub-screens
         // IMPORTANT: clearInput() after every action — when paused the engine
         // never clears keyWasPressed flags so without it actions fire every frame.
         if (keyWasPressed(38) || gamepadWasPressed(12))
         {
-            if (pauseAboutScreen || pauseScoreboardScreen) { pauseAboutScreen = pauseScoreboardScreen = false; }
+            if (pauseAboutScreen || pauseScoreboardScreen || pauseStatsScreen || pauseAchScreen)
+                { pauseAboutScreen = pauseScoreboardScreen = pauseStatsScreen = pauseAchScreen = false; }
             else { pauseMenuOption = (pauseMenuOption - 1 + MENU_ITEMS) % MENU_ITEMS; }
             clearInput();
         }
         else if (keyWasPressed(40) || gamepadWasPressed(13))
         {
-            if (!pauseAboutScreen && !pauseScoreboardScreen)
+            if (!pauseAboutScreen && !pauseScoreboardScreen && !pauseStatsScreen && !pauseAchScreen)
                 pauseMenuOption = (pauseMenuOption + 1) % MENU_ITEMS;
             clearInput();
         }
@@ -766,37 +1211,55 @@ engineInit(
         {
             if (pauseAboutScreen)
             {
-                pauseAboutScreen = false; // back from about
+                pauseAboutScreen = false;
             }
             else if (pauseScoreboardScreen)
             {
-                pauseScoreboardScreen = false; // back from scoreboard
+                pauseScoreboardScreen = false;
+            }
+            else if (pauseStatsScreen)
+            {
+                pauseStatsScreen = false;
+            }
+            else if (pauseAchScreen)
+            {
+                pauseAchScreen = false;
             }
             else if (pauseMenuOption === 0)
             {
-                pauseAboutScreen = pauseScoreboardScreen = false;
-                togglePause(); // resume
+                pauseAboutScreen = pauseScoreboardScreen = pauseStatsScreen = pauseAchScreen = false;
+                togglePause();
             }
             else if (pauseMenuOption === 1)
             {
-                setMusicMute(musicMuted ? 0 : 1); // toggle music
+                setMusicMute(musicMuted ? 0 : 1);
             }
             else if (pauseMenuOption === 2)
             {
-                pauseAboutScreen = pauseScoreboardScreen = false;
+                pauseAboutScreen = pauseScoreboardScreen = pauseStatsScreen = pauseAchScreen = false;
                 togglePause();
-                resetGame(); // restart
+                resetGame();
             }
             else if (pauseMenuOption === 3)
             {
-                pauseAboutScreen = pauseScoreboardScreen = false;
-                pauseScoreboardScreen = true; // open scoreboard
-                _cachedHighScores = loadHighScores(); // FIX 7.1: populate cache on open
+                pauseAboutScreen = pauseScoreboardScreen = pauseStatsScreen = pauseAchScreen = false;
+                pauseStatsScreen = true;
             }
             else if (pauseMenuOption === 4)
             {
-                pauseAboutScreen = false;
-                pauseAboutScreen = true; // open about
+                pauseAboutScreen = pauseScoreboardScreen = pauseStatsScreen = pauseAchScreen = false;
+                pauseScoreboardScreen = true;
+                _cachedHighScores = loadHighScores();
+            }
+            else if (pauseMenuOption === 5)
+            {
+                pauseAboutScreen = pauseScoreboardScreen = pauseStatsScreen = pauseAchScreen = false;
+                pauseAchScreen = true; // open achievements
+            }
+            else if (pauseMenuOption === 6)
+            {
+                pauseAboutScreen = pauseScoreboardScreen = pauseStatsScreen = pauseAchScreen = false;
+                pauseAboutScreen = true;
             }
             clearInput();
         }
@@ -865,6 +1328,7 @@ engineInit(
                     }
                     hudText(rank,                  cx - 240, ry, 22, rowColor, 'left');
                     hudText(entry.name,            cx - 200, ry, 24, rowColor, 'left');
+                    if (entry.daily) hudText('\u2605', cx - 168, ry, 22, '#ffe066', 'left');
                     hudText(entry.score,           cx +  60, ry, 22, rowColor, 'right');
                     hudText('Lv ' + entry.level,   cx + 180, ry, 20, rowColor, 'right');
                 }
@@ -898,27 +1362,136 @@ engineInit(
             mainContext.stroke();
             mainContext.restore();
 
-            hudText('Original game', cx, cy - 82, 18, '#aaa', 'center');
-            hudText('Frank Force', cx, cy - 52, 26, '#fff', 'center');
-            hudText('X: @KilledByAPixel', cx, cy - 24, 20, '#8ef', 'center');
+            hudText('Original game', cx, cy - 88, 18, '#aaa', 'center');
+            hudText('Frank Force', cx, cy - 64, 22, '#fff', 'center');
+            hudText('X: @KilledByAPixel', cx, cy - 42, 16, '#8ef', 'center');
 
+            // IMPROVEMENT 6.4: controls list embedded in the About screen.
             mainContext.save();
             mainContext.strokeStyle = '#334';
             mainContext.lineWidth = 1;
             mainContext.beginPath();
-            mainContext.moveTo(cx - 240, cy + 10);
-            mainContext.lineTo(cx + 240, cy + 10);
+            mainContext.moveTo(cx - 240, cy - 16);
+            mainContext.lineTo(cx + 240, cy - 16);
             mainContext.stroke();
             mainContext.restore();
 
-            hudText('Add-ons & Fire TV port', cx, cy + 40, 18, '#aaa', 'center');
-            hudText('Jeff Cechinel', cx, cy + 68, 26, '#fff', 'center');
-            hudText('X: @Cechineljeff', cx, cy + 96, 20, '#8ef', 'center');
-            hudText('Version ' + APP_VERSION, cx, cy + 126, 18, '#aaa', 'center');
-            hudText('Music: ' + (currentMusicStyleName || 'calm mix'), cx, cy + 148, 18, '#8aa', 'center');
+            hudText('CONTROLS', cx, cy + 4, 16, '#7fdbff', 'center');
+            hudText('Keyboard:  WASD/Arrows = Move  Z = Shoot  X = Roll',       cx, cy +  26, 13, '#fff', 'center');
+            hudText('C = Grenade  R = Rewind  P / Esc = Pause  Enter = OK',     cx, cy +  44, 13, '#fff', 'center');
+            hudText('Fire TV:   D-Pad = Move  OK = Shoot  Play = Pause',       cx, cy +  62, 13, '#fff', 'center');
+            hudText('Rewind = Grenade  FastFwd = Roll',                       cx, cy +  80, 13, '#fff', 'center');
+            hudText('Gamepad:  D-Pad = Move  A = Shoot  B = Roll  X = Grenade',cx, cy +  98, 13, '#fff', 'center');
+
+            // bottom divider + credits
+            mainContext.save();
+            mainContext.strokeStyle = '#334';
+            mainContext.lineWidth = 1;
+            mainContext.beginPath();
+            mainContext.moveTo(cx - 240, cy + 112);
+            mainContext.lineTo(cx + 240, cy + 112);
+            mainContext.stroke();
+            mainContext.restore();
+
+            hudText('Fire TV port \u2014 Jeff Cechinel', cx, cy + 132, 14, '#aaa', 'center');
+            hudText('Version ' + APP_VERSION + '   \u00B7   Music: ' + (currentMusicStyleName || 'calm mix'),
+                   cx, cy + 152, 13, '#8aa', 'center');
 
             const pulse = .5 + .5 * Math.sin(Date.now() / 500);
-            hudText('Press OK to go back', cx, cy + 170, 18, `rgba(150,190,255,${pulse})`, 'center');
+            hudText('Press OK to go back', cx, cy + 180, 18, `rgba(150,190,255,${pulse})`, 'center');
+        }
+        else if (pauseStatsScreen)
+        {
+            // IMPROVEMENT 5.1: per-weapon stats sub-screen.
+            mainContext.save();
+            mainContext.fillStyle = 'rgba(5,5,20,0.95)';
+            mainContext.beginPath();
+            mainContext.roundRect(cx - 300, cy - 200, 600, 400, 20);
+            mainContext.fill();
+            mainContext.strokeStyle = '#7fdbff';
+            mainContext.lineWidth = 2;
+            mainContext.stroke();
+            mainContext.restore();
+
+            hudText('STATS', cx, cy - 158, 36, '#7fdbff', 'center');
+            // gold divider
+            mainContext.save();
+            mainContext.strokeStyle = '#335';
+            mainContext.lineWidth = 1;
+            mainContext.beginPath();
+            mainContext.moveTo(cx - 240, cy - 122);
+            mainContext.lineTo(cx + 240, cy - 122);
+            mainContext.stroke();
+            mainContext.restore();
+
+            // column headers
+            hudText('WEAPON',   cx - 220, cy - 86, 18, '#888', 'left');
+            hudText('FIRED',    cx -  60, cy - 86, 18, '#888', 'right');
+            hudText('HITS',     cx +  20, cy - 86, 18, '#888', 'right');
+            hudText('KILLS',    cx + 100, cy - 86, 18, '#888', 'right');
+            hudText('DAMAGE',   cx + 220, cy - 86, 18, '#888', 'right');
+
+            const wpnNames = ['PISTOL', 'SHOTGUN', 'PLASMA'];
+            const wpnColor = ['#fff', '#f80', '#0ff'];
+            const rowH = 48;
+            for (let i = 0; i < 3; ++i)
+            {
+                const ry = cy - 56 + i * rowH;
+                const s = weaponStats[i];
+                const acc = s.fired > 0 ? Math.round(s.hits / s.fired * 100) : 0;
+                hudText(wpnNames[i], cx - 220, ry, 22, wpnColor[i], 'left');
+                hudText(String(s.fired),  cx -  60, ry, 22, '#fff', 'right');
+                hudText(String(s.hits),   cx +  20, ry, 22, '#fff', 'right');
+                hudText(String(s.kills),  cx + 100, ry, 22, '#fff', 'right');
+                hudText(String(s.damage), cx + 220, ry, 22, '#fff', 'right');
+                hudText(acc + '% accuracy', cx - 220, ry + 22, 14, 'rgba(180,200,220,0.7)', 'left');
+            }
+
+            const pulse = .5 + .5 * Math.sin(Date.now() / 500);
+            hudText('Press OK to go back', cx, cy + 160, 18, `rgba(150,190,255,${pulse})`, 'center');
+        }
+        else if (pauseAchScreen)
+        {
+            // IMPROVEMENT 5.4: achievements sub-screen — list of all 8
+            // achievements with a check mark next to the unlocked ones.
+            mainContext.save();
+            mainContext.fillStyle = 'rgba(5,5,20,0.95)';
+            mainContext.beginPath();
+            mainContext.roundRect(cx - 300, cy - 220, 600, 440, 20);
+            mainContext.fill();
+            mainContext.strokeStyle = '#ffe066';
+            mainContext.lineWidth = 2;
+            mainContext.stroke();
+            mainContext.restore();
+
+            hudText('ACHIEVEMENTS', cx, cy - 178, 36, '#ffe066', 'center');
+            mainContext.save();
+            mainContext.strokeStyle = '#553';
+            mainContext.lineWidth = 1;
+            mainContext.beginPath();
+            mainContext.moveTo(cx - 240, cy - 142);
+            mainContext.lineTo(cx + 240, cy - 142);
+            mainContext.stroke();
+            mainContext.restore();
+
+            const unlockedCount = Object.keys(unlockedAchievements).length;
+            hudText(unlockedCount + ' / ' + ACHIEVEMENTS.length + ' unlocked',
+                    cx, cy - 110, 16, 'rgba(180,180,200,0.8)', 'center');
+
+            const rowH = 38;
+            for (let i = 0; i < ACHIEVEMENTS.length; ++i)
+            {
+                const a = ACHIEVEMENTS[i];
+                const ry = cy - 84 + i * rowH;
+                const got = unlockedAchievements[a.id];
+                const c = got ? '#ffe066' : 'rgba(140,140,170,0.55)';
+                hudText(got ? '\u2713' : '\u00B7',  cx - 260, ry, 22, got ? '#7fff7f' : '#666', 'left');
+                hudText(a.name, cx - 230, ry, 20, c, 'left');
+                hudText(a.desc, cx - 230, ry + 18, 12, 'rgba(180,200,220,0.65)', 'left');
+            }
+
+            const pulse = .5 + .5 * Math.sin(Date.now() / 500);
+            hudText('Press OK to go back', cx, cy + 200, 18, `rgba(150,190,255,${pulse})`, 'center');
         }
         else
         {
@@ -949,7 +1522,9 @@ engineInit(
                 { label: '\u25B6  Resume',                                        color: '#fff'  },
                 { label: (musicMuted ? '\uD83D\uDD07  Music: OFF' : '\uD83D\uDD0A  Music: ON'), color: musicMuted ? '#f88' : '#8f8' },
                 { label: '\u21BA  Restart Game',                                  color: '#faa'  },
+                { label: '\uD83D\uDCCA  Stats',                                   color: '#7fdbff' },
                 { label: '\uD83C\uDFC6  Scoreboard',                              color: '#fc6'  },
+                { label: '\uD83C\uDFAF  Achievements',                            color: '#ffe066' },
                 { label: '\u2139\uFE0F  About',                                   color: '#adf'  },
             ];
             items.forEach((item, idx) => {
@@ -971,14 +1546,16 @@ engineInit(
         }
     }
 
-    // Fire TV / game-over overlay: shown when all players are dead and
-    // lives are exhausted. Tells the user which button restarts the game,
-    // since on the remote the keyboard hints (Z/Space) don't apply.
-    else if (minDeadTime > 1 && playerLives <= 0)
+    // IMPROVEMENT 6.2: GAME OVER panel is now drawn independently of the
+    // pause-menu branch, so it stays visible even when the user has
+    // pressed pause while dying. Drawn after the pause menu so it sits
+    // on top of the dim backdrop in the layered-modal pattern.
+    if (minDeadTime > 1 && playerLives <= 0)
     {
         const cx = mainCanvas.width / 2, cy = mainCanvas.height / 2;
-        // dim backdrop
-        mainContext.fillStyle = 'rgba(0,0,0,0.72)';
+        // dim backdrop (slightly stronger than the LEVEL CLEAR one so the
+        // GAME OVER panel always reads first even with a pause menu behind)
+        mainContext.fillStyle = 'rgba(0,0,0,0.78)';
         mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
 
         // panel background
@@ -1015,6 +1592,9 @@ engineInit(
         hudText(level,          cx - 44, cy - 28, 28, '#7fdbff', 'left');
         hudText('KILLS',        cx - 60, cy + 12, 16, '#888', 'right');
         hudText(totalKills + levelKills, cx - 44, cy + 12, 28, '#ffffff', 'left');
+        // IMPROVEMENT 2.3: tell the player what killed them — learning moment.
+        hudText('Killed by:',  cx - 110, cy + 40, 16, '#a88', 'right');
+        hudText(lastKillerName || 'unknown', cx - 94, cy + 40, 16, '#ffb347', 'left');
 
         // gold divider
         mainContext.save();
@@ -1029,7 +1609,9 @@ engineInit(
         // pulsing prompt
         const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 520);
         hudText('Press OK to play again', cx, cy + 86, 26, `rgba(255,224,102,${pulse})`, 'center');
-        hudText('(Z, Space, R  \u00B7  Gamepad A  \u00B7  Rewind)', cx, cy + 124, 16, 'rgba(140,140,170,0.7)', 'center');
+        // The engine's remapFireTV() maps both Enter/OK (13) and the Fire TV
+        // Rewind button to keyCode 82/91, so list each unique restart key once.
+        hudText('(OK \u00B7 Z \u00B7 Space \u00B7 R \u00B7 Gamepad A)', cx, cy + 124, 16, 'rgba(140,140,170,0.7)', 'center');
     }
 
     // On-screen name-entry keyboard (active after a qualifying game-over run).
@@ -1037,6 +1619,137 @@ engineInit(
     // the GAME OVER overlay above.
     if (nameEntryActive)
         drawNameEntry();
+
+    // IMPROVEMENT 3.3: kill-streak banner — fades + pops in when the player
+    // crosses a streak threshold. Drawn after every other overlay so it
+    // sits on top of the HUD without being covered by panels.
+    if (streakBannerTime > 0 && streakBannerText)
+    {
+        const t = streakBannerTime;
+        const fade = t < 0.4 ? t / 0.4 : 1;
+        const pop  = 1 + max(0, 0.15 - t) * 0.6;
+        const cw = mainCanvas.width, ch = mainCanvas.height;
+        const y = ch * 0.22 - (1.5 - t) * 20;
+        hudText(streakBannerText, cw / 2, y, 38 * pop, `rgba(255, 240, 120, ${fade})`, 'center');
+        if (streakCount >= 3)
+            hudText('combo: ' + streakCount, cw / 2, y + 28, 18, `rgba(255, 255, 255, ${fade * 0.75})`, 'center');
+    }
+
+    // IMPROVEMENT 4.4: "LEVEL N" title card, fades in fast, holds, fades out
+    // over the last 0.5s. Includes the objective hint so new players learn
+    // that they need to clear enemies before the box ends the level.
+    if (levelTitleTimer > 0)
+    {
+        const cw = mainCanvas.width, ch = mainCanvas.height;
+        // 0.15s fade-in, 0.5s fade-out.
+        const fadeIn  = min(1, (1.5 - levelTitleTimer) / .15);
+        const fadeOut = levelTitleTimer < .5 ? levelTitleTimer / .5 : 1;
+        const alpha = fadeIn * fadeOut;
+        const pop = fadeIn < 1 ? 1 + (1 - fadeIn) * .4 : 1;
+        // Dim backdrop
+        mainContext.save();
+        mainContext.fillStyle = `rgba(0, 0, 0, ${alpha * 0.45})`;
+        mainContext.fillRect(0, 0, cw, ch);
+        mainContext.restore();
+        // Title
+        hudText('LEVEL ' + level, cw / 2, ch * .40, 72 * pop, `rgba(255, 224, 102, ${alpha})`, 'center');
+        // Gold accent line
+        if (alpha > .3)
+        {
+            mainContext.save();
+            mainContext.strokeStyle = `rgba(255, 224, 102, ${alpha * .8})`;
+            mainContext.lineWidth = 2;
+            mainContext.beginPath();
+            mainContext.moveTo(cw / 2 - 100, ch * .40 + 44);
+            mainContext.lineTo(cw / 2 + 100, ch * .40 + 44);
+            mainContext.stroke();
+            mainContext.restore();
+        }
+        // Objective hint
+        hudText(levelTitleObjective, cw / 2, ch * .40 + 70, 22, `rgba(255, 255, 255, ${alpha * .85})`, 'center');
+    }
+
+    // IMPROVEMENT 5.4: achievement unlock toast — slides in from the right
+    // and fades out over its 3-second lifetime. Drawn after every other
+    // overlay so it sits on top of the HUD.
+    if (achievementToastTime > 0 && achievementToastName)
+    {
+        const cw = mainCanvas.width, ch = mainCanvas.height;
+        const t = achievementToastTime;
+        const fade = t < 0.5 ? t / 0.5 : 1;
+        const slide = max(0, 0.3 - t) * 200;
+        const x = cw - 220 + slide;
+        const y = ch * 0.12;
+        mainContext.save();
+        mainContext.fillStyle = `rgba(20, 20, 30, ${fade * 0.85})`;
+        mainContext.beginPath();
+        mainContext.roundRect(x - 200, y - 12, 200, 60, 10);
+        mainContext.fill();
+        mainContext.strokeStyle = `rgba(255, 224, 102, ${fade})`;
+        mainContext.lineWidth = 2;
+        mainContext.stroke();
+        mainContext.restore();
+        hudText('UNLOCKED', x - 190, y,     12, `rgba(255, 224, 102, ${fade})`,  'left');
+        hudText(achievementToastName, x - 190, y + 18, 22, `rgba(255, 255, 255, ${fade})`, 'left');
+    }
+
+    // IMPROVEMENT 6.5: kill popups — floating "+N" text that rises and fades
+    // from the kill location. Each popup is one text draw in world space.
+    if (_killPopups.length)
+    {
+        for (let i = 0; i < _killPopups.length; ++i)
+        {
+            const p   = _killPopups[i];
+            const t   = p.time / p.lifetime;        // 1 → 0
+            const lift = (1 - t) * 0.7;             // rise 0.7 world units
+            const worldPos = vec2(p.pos.x, p.pos.y + lift);
+            // draw at world position, scaled by cameraScale
+            const sp = worldToScreen(worldPos);
+            const size  = 18 * (1 + (1 - t) * .25);
+            const color = p.color.startsWith('rgba') ? p.color
+                : (p.color.startsWith('#')
+                    ? p.color + ((t * 255) | 0).toString(16).padStart(2, '0')
+                    : p.color);
+            mainContext.save();
+            mainContext.font = `bold ${size}px impact`;
+            mainContext.textAlign = 'center';
+            mainContext.textBaseline = 'middle';
+            mainContext.fillStyle = color;
+            mainContext.shadowColor = 'rgba(0,0,0,0.95)';
+            mainContext.shadowBlur = 5;
+            mainContext.fillText('+' + p.value, sp.x, sp.y);
+            mainContext.restore();
+        }
+    }
+
+    // IMPROVEMENT 6.1: tutorial overlay — bottom-of-screen banner for the
+    // current step. Step counter in the corner so the player knows it's
+    // multi-step. Drawn last so it sits on top of every other overlay.
+    if (tutActive && tutStep >= 0 && tutStep < TUT_STEPS.length)
+    {
+        const cw = mainCanvas.width, ch = mainCanvas.height;
+        const [label, desc] = TUT_STEPS[tutStep];
+        const t = tutStepTime;
+        const fade = min(1, (3.5 - t) / .25) * min(1, t / .25);
+        const boxH = 110;
+        const boxY = ch - boxH - 30;
+        mainContext.save();
+        mainContext.fillStyle = `rgba(10, 20, 30, ${fade * 0.9})`;
+        mainContext.beginPath();
+        mainContext.roundRect(cw / 2 - 320, boxY, 640, boxH, 14);
+        mainContext.fill();
+        mainContext.strokeStyle = `rgba(127, 219, 255, ${fade})`;
+        mainContext.lineWidth = 2;
+        mainContext.stroke();
+        mainContext.restore();
+        // Step counter
+        hudText('STEP ' + (tutStep + 1) + ' / ' + TUT_STEPS.length,
+                cw / 2 - 300, boxY + 12, 13, `rgba(127, 219, 255, ${fade * 0.85})`, 'left');
+        // Controls
+        hudText(label, cw / 2, boxY + 42, 28, `rgba(255, 255, 255, ${fade})`, 'center');
+        // Description
+        hudText(desc, cw / 2, boxY + 76, 16, `rgba(200, 220, 240, ${fade * 0.85})`, 'center');
+    }
 });
 
 ///////////////////////////////////////////////////////////////////////////////

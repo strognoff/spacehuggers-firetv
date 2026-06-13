@@ -273,6 +273,9 @@ const resetGame=()=>
     score = 0; levelScore = 0; levelKills = 0; levelStartTime = 0; levelTimeBonus = 0;
     currentMusicStyle = 0;
     currentMusicStyleName = '';
+    // IMPROVEMENT 5.1: reset per-weapon stats on full game reset.
+    for (let i = 0; i < weaponStats.length; ++i)
+        weaponStats[i].fired = weaponStats[i].hits = weaponStats[i].kills = weaponStats[i].damage = 0;
     // Fire TV: signal nextLevel() to use an extended GPU drain delay.
     // After a full game-over the GPU has been holding the entire previous
     // level's tile textures in VRAM throughout the death-screen wait, so
@@ -682,10 +685,15 @@ function makeTileLayers(level_)
     // WebGL canvas at all. Restored immediately after so sprites/effects still
     // use WebGL for the rest of the frame.
     const _savedGlEnable = glEnable;
-    glEnable = 1;
+    glEnable = 0;
+    const _tilePixW = levelSize.x * defaultTileSize.x;
+    const _tilePixH = levelSize.y * defaultTileSize.y;
+    console.log('[firetv-tiles] baking tiles, glEnable=' + glEnable + ', tiles=' + levelSize.x + 'x' + levelSize.y + ', px=' + _tilePixW + 'x' + _tilePixH + ', lowGfx=' + (lowGraphicsSettings ? 1 : 0));
     tileLayer.redraw();
+    console.log('[firetv-tiles] fg baked, bg starting');
     tileBackgroundLayer.redraw();
     glEnable = _savedGlEnable;
+    console.log('[firetv-tiles] tile bake complete, glEnable restored=' + glEnable);
 }
 
 function applyArtToLevel()
@@ -770,15 +778,46 @@ function finishLevelSetup()
         }
     });
 
-    // ── Spawn one BonusBox at a random ground position ────────────────────────
-    for (let tries = 20; tries--;)
+    // ── Spawn the level finale — boss on every 5th level, otherwise BonusBox ─
+    // IMPROVEMENT 5.3: every 5th level spawns a Boss instead of the BonusBox.
+    // The Boss drops the BonusBox at its death position when killed.
+    if (level > 0 && level % 5 === 0)
     {
-        const bx = rand(levelSize.x - 20, 20);
+        const bx = levelSize.x / 2;
         const hit = tileCollisionRaycast(vec2(bx, levelSize.y), vec2(bx, 0));
-        if (hit && abs(checkpointPos.x - bx) > 15)
+        if (hit)
+            new Boss(hit.add(vec2(0, 2)));
+    }
+    else
+    {
+        for (let tries = 20; tries--;)
         {
-            new BonusBox(hit.add(vec2(0, 2)), randColor(new Color(.5,.5,.2), new Color(1,1,.6)));
-            break;
+            const bx = rand(levelSize.x - 20, 20);
+            const hit = tileCollisionRaycast(vec2(bx, levelSize.y), vec2(bx, 0));
+            if (hit && abs(checkpointPos.x - bx) > 15)
+            {
+                new BonusBox(hit.add(vec2(0, 2)), randColor(new Color(.5,.5,.2), new Color(1,1,.6)));
+                break;
+            }
+        }
+    }
+
+    // IMPROVEMENT 1.2: COLLECT objective — scatter `stashesRequired` stash
+    // pickups around the level for the player to find.
+    if (objectiveType === OBJECTIVE_COLLECT)
+    {
+        for (let i = 0; i < stashesRequired; ++i)
+        {
+            for (let tries = 20; tries--;)
+            {
+                const sx = rand(levelSize.x - 20, 20);
+                const hit = tileCollisionRaycast(vec2(sx, levelSize.y), vec2(sx, 0));
+                if (hit && abs(checkpointPos.x - sx) > 10)
+                {
+                    new Stash(hit.add(vec2(0, 1.5)));
+                    break;
+                }
+            }
         }
     }
 
@@ -795,6 +834,27 @@ function finishLevelSetup()
     //new Enemy(checkpointPos.add(vec2(3))); // test enemy
 }
 
+// IMPROVEMENT 5.2: daily-seed mode. When enabled, every player gets the
+// same level on the same day (seed = YYYYMMDD). Set from URL `?daily=1`
+// or by the pause menu toggle. The scoreboard flags daily runs so a
+// player's "today's best" is directly comparable with anyone else's.
+let dailyMode = 0;
+
+const isDailyMode = ()=>
+{
+    if (dailyMode) return 1;
+    try { return /[?&]daily=1\b/.test(location.search) ? 1 : 0; }
+    catch (e) { return 0; }
+};
+
+// Derive a YYYYMMDD integer from the current local date. Stable within a
+// day so the daily level is the same for every player all day.
+const dailySeedForToday = ()=>
+{
+    const d = new Date();
+    return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+};
+
 function nextLevel()
 {
     if (!pendingNextLevelResume)
@@ -808,9 +868,49 @@ function nextLevel()
         score += levelScore;
         if (level)
             playerLives += 1; // gain 1 extra life for clearing a level after the first
+        // IMPROVEMENT 4.2: beat the personal best for this level. If this is
+        // the player's first time finishing the level, just record the time.
+        if (level > 0)
+        {
+            const bests = loadLevelBests();
+            const prev = bests[level] | 0;
+            if (!prev || levelElapsed < prev)
+            {
+                if (prev) newBestFlag = 1;          // beat an existing record
+                bests[level] = levelElapsed | 0;
+                saveLevelBests(bests);
+            }
+            // IMPROVEMENT 5.4: Speed Demon achievement (cleared a level in
+            // under 30s, based on the time of the *just-completed* level).
+            if (levelElapsed < 30)
+                unlockAchievement('speed_demon', 'Speed Demon');
+        }
+        // IMPROVEMENT 5.4: Marathon achievement on reaching level 20.
+        if (level >= 20)
+            unlockAchievement('marathon', 'Marathon');
         levelEnemyCount = 15 + min(level * 30, 300);
         ++level;
-        levelSeed = randSeed = rand(1e9)|0;
+        // IMPROVEMENT 4.4: arm the "LEVEL N" title card for the new level.
+        levelTitleTimer = 1.5;
+        // IMPROVEMENT 1.2: pick an objective type for this level. The mix is
+        // 60% HUNT (default), 30% SURVIVE, 10% COLLECT. The survive time
+        // scales with the level so late-game SURVIVE/COLLECT aren't trivial.
+        const _objRoll = rand();
+        if (_objRoll < .60)      objectiveType = OBJECTIVE_HUNT;
+        else if (_objRoll < .90) { objectiveType = OBJECTIVE_SURVIVE; surviveTimer = 20 + min(level * 2, 40); surviveGoal = surviveTimer; }
+        else                     { objectiveType = OBJECTIVE_COLLECT; stashesCollected = 0; stashesRequired = 3; }
+        if (objectiveType === OBJECTIVE_HUNT)
+            levelTitleObjective = 'CLEAR ALL ENEMIES — THEN BREAK THE BOX';
+        else if (objectiveType === OBJECTIVE_SURVIVE)
+            levelTitleObjective = 'SURVIVE ' + (surviveGoal | 0) + ' SECONDS — THEN BREAK THE BOX';
+        else
+            levelTitleObjective = 'COLLECT ' + stashesRequired + ' STASHES (BLUE) — THEN BREAK THE BOX';
+        // IMPROVEMENT 5.2: daily mode pins the seed to today's date so all
+        // players get the same level on the same day.
+        if (isDailyMode())
+            levelSeed = randSeed = dailySeedForToday();
+        else
+            levelSeed = randSeed = rand(1e9)|0;
         levelSize = vec2(min(level*99,400),200);
         // Fire TV / lowGraphicsSettings: cap level dimensions so tile canvases
         // stay within GPU memory limits. At 16px/tile: 100×100 tiles = 1600×1600
@@ -825,6 +925,10 @@ function nextLevel()
         _skyGradient = null; // invalidate cached sky gradient (rebuilt in appRender)
         levelSkyHorizonColor = levelSkyColor.subtract(new Color(.05,.05,.05)).mutate(.3).clamp();
         levelGroundColor = levelColor.mutate().add(new Color(.3,.3,.3)).clamp();
+
+        // IMPROVEMENT 4.2: load the best time for the *new* level so the
+        // TIME panel can show "current / best".
+        levelBestTime = (loadLevelBests()[level] | 0);
     }
     else
         pendingNextLevelResume = 0;

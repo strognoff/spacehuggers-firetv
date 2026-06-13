@@ -240,6 +240,74 @@ class Character extends GameObject
 
         const blinkScale = this.canBlink ? this.isDead() ? .3: .5 + .5*Math.cos(this.blinkTimer.getPercent()*PI*2) : 1;
             drawTile(this.pos.add(vec2(this.getMirrorSign(.05),.46).scale(sizeScale).rotate(-this.angle)),vec2(sizeScale/2, blinkScale*sizeScale/2),this.headTile+1,vec2(8), eyeColor, this.angle, this.mirror, this.additiveColor);
+
+        // IMPROVEMENT 2.1: HP bar above the player's head. 4 segments; filled
+        // green→yellow→red as HP drops. Drawn in world space (auto-scales with
+        // cameraScale). 5 draw calls per player per frame — negligible.
+        if (this.isPlayer && !this.isDead() && this.healthMax > 0)
+        {
+            const segW = 0.32, gap = 0.06, h = 0.13;
+            const totalW = this.healthMax * segW + (this.healthMax - 1) * gap;
+            const barY  = this.pos.y + this.size.y * .5 + .25;
+            const startX = this.pos.x - totalW * .5;
+            for (let i = 0; i < this.healthMax; i++)
+            {
+                const x = startX + i * (segW + gap) + segW * .5;
+                const filled = i < this.health;
+                let c;
+                if (filled)
+                    c = this.health >= 3 ? new Color(.3,.9,.3)
+                      : this.health === 2 ? new Color(.95,.85,.2)
+                                          : new Color(.95,.3,.2);
+                else
+                    c = new Color(.15,.05,.05,.55);
+                drawRect(vec2(x, barY), vec2(segW, h), c);
+            }
+        }
+
+        // IMPROVEMENT 3.4: grenade throw-arc preview dots while the throw
+        // key is held. 7 dots along the predicted ballistic trajectory, 2
+        // frames apart. Uses the engine's gravity constant for a real
+        // parabola. Cheap (7 drawRect calls) and only runs while aiming.
+        if (this.isPlayer && this.pressingThrow && this.grenadeCount > 0 && !this.isDead())
+        {
+            const vx = this.getMirrorSign() * 0.26;
+            const vy = 0.20;
+            const g  = gravity * .5; // half-g for position formula y = vy*t + g*t^2
+            const origin = this.pos.add(vec2(0, this.size.y * .4));
+            for (let t = 2; t <= 14; t += 2)
+            {
+                const px = origin.x + vx * t;
+                const py = origin.y + vy * t + g * t * t;
+                const fade = 1 - (t - 2) / 14;
+                drawRect(vec2(px, py), vec2(0.12, 0.12),
+                         new Color(1, .8, .3, fade * .7));
+            }
+        }
+
+        // IMPROVEMENT 3.4: grenade count badge below the player (always shown
+        // when grenades > 0, so the player knows their ammo at a glance).
+        if (this.isPlayer && this.grenadeCount > 0 && !this.isDead())
+        {
+            const badgeY = this.pos.y - this.size.y * .5 - 0.05;
+            const badgeX = this.pos.x + this.size.x * .5 + 0.25;
+            // small purple circle (grenade color)
+            drawRect(vec2(badgeX, badgeY), vec2(0.22, 0.22), new Color(.7, 0, 1));
+            // count text just to the right of the badge
+            const _oldFont = mainContext.font;
+            const _oldAlign = mainContext.textAlign;
+            const _oldBase  = mainContext.textBaseline;
+            mainContext.font = 'bold 12px impact';
+            mainContext.textAlign = 'left';
+            mainContext.textBaseline = 'middle';
+            mainContext.fillStyle = '#fff';
+            mainContext.shadowColor = 'rgba(0,0,0,0.95)';
+            mainContext.shadowBlur = 4;
+            mainContext.fillText('x' + this.grenadeCount, badgeX + 0.18, badgeY);
+            mainContext.font = _oldFont;
+            mainContext.textAlign = _oldAlign;
+            mainContext.textBaseline = _oldBase;
+        }
     }
 
     damage(damage, damagingObject)
@@ -266,7 +334,32 @@ class Character extends GameObject
 
         this.blinkTimer.set(rand(.5,.4));
         makeBlood(damagingObject ? damagingObject.pos : this.pos);
-        super.damage(damage, damagingObject);
+        const wasAlive = !this.isDead();
+        const dmgApplied = super.damage(damage, damagingObject);
+
+        // IMPROVEMENT 2.2: when the player actually takes damage and survives
+        // this hit, fire the impact sound, kick the camera, and trigger a
+        // 2-frame hit-pause. (Death is already covered by Character.kill.)
+        if (this.isPlayer && dmgApplied > 0 && !this.isDead())
+        {
+            playSound(sound_player_hit, this.pos);
+            cameraShake = min(1, cameraShake + 0.15);
+            hitPauseFrames = 2;
+            // IMPROVEMENT 3.3: taking damage resets the kill streak.
+            if (streakCount > 0)
+            {
+                streakCount = 0;
+                streakBannerText = '';
+            }
+        }
+
+        // IMPROVEMENT 2.3: capture who killed the player for the GAME OVER
+        // panel's "Killed by:" line. Set only on the lethal hit, before
+        // the respawn clears the player.
+        if (this.isPlayer && wasAlive && this.isDead())
+        {
+            lastKillerName = describeKiller(damagingObject);
+        }
     }
 
     kill(damagingObject)                  
@@ -374,6 +467,36 @@ function alertEnemies(pos, playerPos)
     forEachObject(pos, radius, (o)=>{o.team == team_enemy && o.alert && o.alert(playerPos)});
     debugAI && debugCircle(pos, radius, '#0ff6');
 }
+
+// IMPROVEMENT 2.3: turn whatever hit the player into a friendly label
+// for the GAME OVER panel. Bullet / grenade / enemy type / environment.
+const describeKiller = (o) =>
+{
+    if (!o)                              return 'the environment';
+    if (o.isGrenade)                     return 'a grenade';
+    if (o.isBullet)
+        return o.weaponType === 2 ? 'a plasma bolt'
+             : o.weaponType === 1 ? 'a shotgun blast'
+                                  : 'a bullet';
+    if (o.isProp)
+    {
+        if (o.explosionSize)             return 'a prop explosion';
+        if (o.isLavaRock)                return 'a lava rock';
+        return 'flying debris';
+    }
+    if (o.isLavaRock)                    return 'a lava rock';
+    if (o.isEnemy)
+    {
+        if (o.type === type_weak)        return 'a grunt';
+        if (o.type === type_normal)      return 'a soldier';
+        if (o.type === type_strong)      return 'a heavy';
+        if (o.type === type_elite)       return 'an elite trooper';
+        if (o.type === type_grenade)     return 'a grenadier';
+        return 'an enemy';
+    }
+    if (o.isPlayer)                      return 'friendly fire';
+    return 'something nasty';
+};
 
 class Enemy extends Character
 {
@@ -677,13 +800,119 @@ class Enemy extends Character
         if (!levelWarmup) {
             ++totalKills;
             ++levelKills;
-            levelScore += 100 * (level + 1);
+            const pointsThisKill = 100 * (level + 1);
+            levelScore += pointsThisKill;
+            // IMPROVEMENT 6.5: floating "+N" popup at the kill location.
+            // The popup text and color match the per-kill score gain. We use
+            // an opaque color so the fade comes from the popup's lifetime.
+            spawnKillPopup(this.pos, pointsThisKill, 'rgba(255, 179, 71, 0.95)');
             // 35% weapon drop chance — shotgun or plasma only (pistol is starting weapon)
             if (Math.random() < 0.35) {
                 const pickupType = Math.random() < 0.5 ? weaponType_shotgun : weaponType_plasma;
                 new WeaponPickup(this.pos, pickupType);
             }
+            // IMPROVEMENT 3.2: small camera kick on every enemy kill — pure
+            // feel-good juice. One line, one scalar add.
+            cameraShake = min(1, cameraShake + 0.05);
+            // IMPROVEMENT 3.3: increment kill streak; surface a "xN STREAK"
+            // banner when crossing a threshold. The banner display itself is
+            // updated in app.js from a timer.
+            ++streakCount;
+            streakTimer = 4;
+            if (streakCount === 3)      { streakBannerText = 'x3 STREAK!';       streakBannerTime = 1.5; }
+            else if (streakCount === 5) { streakBannerText = 'x5 STREAK!!';      streakBannerTime = 1.8; }
+            else if (streakCount === 10){ streakBannerText = 'x10 UNSTOPPABLE!'; streakBannerTime = 2.2; }
+            else if (streakCount % 25 === 0)
+                                       { streakBannerText = 'x' + streakCount + ' GODLIKE!'; streakBannerTime = 2.5; }
+            // IMPROVEMENT 5.1: tally the kill on the attacker's weapon stat.
+            if (damagingObject && damagingObject.isBullet && damagingObject.weaponType !== undefined
+                && damagingObject.attacker && damagingObject.attacker.isPlayer)
+            {
+                weaponStats[damagingObject.weaponType].kills += 1;
+            }
+            // IMPROVEMENT 5.3: if this was the level boss, spawn the BonusBox
+            // at its position so the level's finale can proceed.
+            if (this.isBoss && !levelEndTimer.isSet())
+            {
+                const box = new BonusBox(this.pos, new Color(1, .9, .3));
+                // big camera shake + screen flash for the boss kill
+                cameraShake = 1;
+                playSound(sound_explosion, this.pos);
+                // IMPROVEMENT 5.4: Boss Slayer achievement.
+                unlockAchievement('boss_slayer', 'Boss Slayer');
+            }
+            // IMPROVEMENT 5.4: First Blood + streak achievements.
+            if (totalKills === 1)
+                unlockAchievement('first_blood', 'First Blood');
+            if (streakCount === 5)  unlockAchievement('combo_5',  'Combo Breaker');
+            if (streakCount === 10) unlockAchievement('combo_10', 'Unstoppable');
         }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// IMPROVEMENT 5.3: Boss enemy — appears on every 5th level. Has high HP,
+// a periodic radial bullet burst, and a guaranteed weapon drop. The
+// BonusBox spawns at the boss's position when it dies (handled in
+// Enemy.kill via `this.isBoss`), turning the boss into the level finale.
+
+class Boss extends Enemy
+{
+    constructor(pos)
+    {
+        super(pos);
+        this.isBoss   = 1;
+        this.type     = type_elite;          // re-use elite visuals
+        this.size     = this.size.scale(1.6);
+        this.sizeScale = 1.6;
+        this.mass     *= 2;
+        this.canBurn  = 0;                  // immune to fire
+        this.maxVisionRange = 20;
+        // HP scales with level so late-game bosses are tougher.
+        this.health = this.healthMax = 25 + level * 5;
+        // Re-tint: white body, gold eyes — distinct from regular elites.
+        this.color  = new Color(1, 1, 1);
+        this.eyeColor = new Color(1, .85, .2);
+        // Special attack timer — radial burst every ~2 seconds.
+        this.bossBurstTimer = new Timer(2);
+    }
+
+    update()
+    {
+        if (this.isDead() || levelWarmup || !this.inUpdateWindow())
+        {
+            super.update();
+            return;
+        }
+
+        // Periodic radial bullet burst (8 directions). Uses a new Bullet
+        // per direction — 8 extra objects for ~0.4s each, bounded cost.
+        if (this.bossBurstTimer.elapsed() && !this.dodgeTimer.active())
+        {
+            this.bossBurstTimer.set(2);
+            for (let i = 0; i < 8; ++i)
+            {
+                const a = i * (PI * 2 / 8);
+                const dir = vec2().setAngle(a, 0.5);
+                const b = new Bullet(this.pos, this);
+                b.velocity = dir;
+                b.range = 8;
+                b.color = new Color(1, .6, .2);
+            }
+        }
+
+        super.update();
+    }
+
+    render()
+    {
+        // Bigger pulsing gold aura for the boss.
+        const pulse = .5 + .5 * Math.sin(time * 4);
+        setBlendMode(1);
+        drawRect(this.pos, vec2(this.size.x * (2 + pulse * .4)),
+                 new Color(1, .85, .2, .18 + pulse * .18));
+        setBlendMode(0);
+        super.render();
     }
 }
 
@@ -692,10 +921,13 @@ class Enemy extends Character
 
 class Player extends Character
 {
-    constructor(pos, playerIndex=0) 
-    { 
+    constructor(pos, playerIndex=0)
+    {
         super(pos);
 
+        // IMPROVEMENT 2.1: replace the 1-HP-one-shot-kill with a 4-HP bar. Damage
+        // is now per-hit; the player respawns at full HP if they have lives left.
+        this.health = this.healthMax = 4;
         this.grenadeCount = 3;
         this.burnTime = 2;
         
@@ -713,6 +945,9 @@ class Player extends Character
         this.walkSoundTime = 0;
         this.persistent = this.wasHoldingJump = this.canBlink = this.isPlayer = 1;
         this.team = team_player;
+        // IMPROVEMENT 5.4: track total time spent on fire (per life) so
+        // the "Fireproof" achievement can unlock after surviving 3s of burn.
+        this.fireSurvivalTime = 0;
         
         new Weapon(this.pos, this);
         players[playerIndex] = this;
@@ -725,6 +960,16 @@ class Player extends Character
 
     update()
     {
+        // IMPROVEMENT 5.4: track fire survival time for the Fireproof
+        // achievement. Increments only while the player is actively
+        // burning and still alive; resets each respawn.
+        if (this.isPlayer && !this.isDead() && this.burnTimer.isSet())
+        {
+            this.fireSurvivalTime = (this.fireSurvivalTime || 0) + timeDelta;
+            if (this.fireSurvivalTime > 3)
+                unlockAchievement('fireproof', 'Fireproof');
+        }
+
         if (this.isDead())
         {
             if (this.persistent && playerLives)

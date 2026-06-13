@@ -47,11 +47,6 @@ onkeydown   = e=>
         isUsingFireTVRemote = 1;
     else
         isUsingFireTVRemote = 0;
-    // TEMP DEBUG: log every keydown so we can see what the WebView is
-    // actually receiving. If even arrow keys don't appear in adb logcat,
-    // the issue is the WebView layer, not the remap table.
-    // Remove this block once the media buttons are confirmed working.
-    console.log('[firetv-input] keyCode=' + c);
     e.repeat || (inputData[isUsingGamepad = 0][remapKeyCode(c)] = {d:hadInput=1, p:1});
 }
 onkeyup     = e=>

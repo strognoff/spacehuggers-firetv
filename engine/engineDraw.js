@@ -60,8 +60,18 @@ function drawTile(pos, size=vec2(1), tileIndex=-1, tileSize=defaultTileSize, col
                 const sY = (tileIndex/cols|0)*tileSize.y + tileBleedShrinkFix;
                 const sWidth  = tileSize.x - 2*tileBleedShrinkFix;
                 const sHeight = tileSize.y - 2*tileBleedShrinkFix;
-                context.globalAlpha = color.a; // only alpha is supported
+                context.globalAlpha = color.a;
                 context.drawImage(tileImage, sX, sY, sWidth, sHeight, -.5, -.5, 1, 1);
+                // Apply RGB color tint via multiply blend — reproduces the same
+                // color×texture multiplication that the WebGL shader performs.
+                // Skip if color is pure white (default) to avoid an unnecessary fillRect.
+                if (color.r < .99 || color.g < .99 || color.b < .99)
+                {
+                    context.globalCompositeOperation = 'multiply';
+                    context.fillStyle = 'rgb(' + (color.r*255|0) + ',' + (color.g*255|0) + ',' + (color.b*255|0) + ')';
+                    context.fillRect(-.5, -.5, 1, 1);
+                    context.globalCompositeOperation = 'source-over';
+                }
             }
         });
     }

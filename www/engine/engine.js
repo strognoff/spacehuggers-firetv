@@ -83,7 +83,21 @@ function engineInit(appInit, appUpdate, appUpdatePost, appRender, appRenderPost)
         // you don't see this in adb logcat, the WebView isn't executing
         // www/app.js at all (different problem — likely APK stale or
         // WebGL init failure). Remove once media keys are confirmed.
-        console.log('[firetv-boot] engine init, webGL=' + (glEnable ? 1 : 0));
+        console.log('[firetv-boot] engine init, webGL=' + (glEnable ? 1 : 0) + ', lowGraphics=' + (lowGraphicsSettings ? 1 : 0) + ', hasChrome=' + (!!window['chrome'] ? 1 : 0));
+
+        // Global JS error trap — logs uncaught exceptions to adb logcat before
+        // the renderer process dies. Without this, renderer crashes produce no
+        // JS-level evidence in the log, only the aw_browser_terminator entry.
+        window.onerror = (msg, src, line, col, err) =>
+        {
+            console.error('[firetv-jserr] ' + msg + ' @ ' + src + ':' + line + ':' + col
+                + (err && err.stack ? '\n' + err.stack : ''));
+            return false; // don't suppress default handling
+        };
+        window.onunhandledrejection = (e) =>
+        {
+            console.error('[firetv-jserr] unhandledrejection: ' + (e.reason || e));
+        };
 
         debugInit();
         // Fire TV: WebGL GPU-process crashes on some devices. If glInit

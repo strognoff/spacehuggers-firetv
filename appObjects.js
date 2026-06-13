@@ -453,12 +453,12 @@ class Weapon extends EngineObject
         super.update();
 
         // weapon stats: [fireRate, bulletCount, spread, bulletSpeed, bulletRange]
-        const weaponStats = [
+        const wpnStats = [
             [0.25, 1,  0.05, 0.5, 20],  // pistol
             [0.5,  5,  0.2,  0.4, 12],  // shotgun
             [0.15, 1,  0.02, 0.8, 30],  // plasma
         ];
-        const stats = weaponStats[this.weaponType] || weaponStats[0];
+        const stats = wpnStats[this.weaponType] || wpnStats[0];
         const [fireInterval, bulletCount, spread, bulletSpeed, bulletRange] = stats;
 
         this.mirror = this.parent.mirror;
@@ -482,7 +482,13 @@ class Weapon extends EngineObject
                     const direction = vec2(this.getMirrorSign(speed), 0);
                     bullet.velocity = direction.rotate(rand(spread,-spread));
                     bullet.range = bulletRange;
+                    bullet.weaponType = this.weaponType;
                 }
+
+                // IMPROVEMENT 5.1: tally bullets fired by the player. Per
+                // bullet so shotgun pellets each count individually.
+                if (this.parent.isPlayer)
+                    weaponStats[this.weaponType].fired += bulletCount;
 
                 this.shellEmitter.localAngle = -.8*this.getMirrorSign();
                 this.shellEmitter.emitParticle();
@@ -562,6 +568,26 @@ class Bullet extends EngineObject
         {
             o.damage(this.damage, this);
             o.applyForce(this.velocity.scale(.1));
+
+            // IMPROVEMENT 3.1: 4-particle hit-spark at the impact point.
+            // 0.12s lifetime → max ~16 particles in flight even in heavy combat.
+            new ParticleEmitter(
+                this.pos, 0, .12, 4, PI,
+                0, undefined,
+                new Color(1,1,.6), new Color(1,.5,.2),
+                new Color(1,1,.6,0), new Color(1,.5,.2,0),
+                .12, .15, 0, .1, .1,
+                1, 1, 0, PI, 0,
+                .5, 0, 1
+            );
+
+            // IMPROVEMENT 5.1: tally hits and damage for the player's weapon.
+            if (this.attacker && this.attacker.isPlayer && this.weaponType !== undefined)
+            {
+                weaponStats[this.weaponType].hits += 1;
+                weaponStats[this.weaponType].damage += this.damage;
+            }
+
             if (o.isCharacter)
             {
                 playSound(sound_walk, this.pos);
@@ -570,8 +596,8 @@ class Bullet extends EngineObject
             else
                 this.kill();
         }
-    
-        return 1; 
+
+        return 1;
     }
 
     collideWithTile(data, pos)
@@ -631,6 +657,9 @@ class BonusBox extends GameObject {
         this.boxColor     = color || new Color(1, .8, 0);
         this.renderOrder  = 1e8;
         this.setCollision(1, 0);        // collidable (so forEachObject finds it) but not solid (no physics blocking)
+        // IMPROVEMENT 1.3: publish a reference so the HUD can draw an off-screen
+        // direction arrow at the screen edge when the box is far away.
+        bonusBoxRef = this;
     }
 
     // Called by Bullet.collideWithObject when a bullet overlaps this box.
@@ -642,6 +671,15 @@ class BonusBox extends GameObject {
 
         if (this.destroyed || levelEndTimer.isSet())
             return 1;
+
+        // IMPROVEMENT 1.1: the BonusBox is now the level finale, not the only
+        // objective. Players must clear all enemies first; shooting the box
+        // early plays a "locked" buzz and the box survives.
+        if (typeof areaClear !== 'undefined' && !areaClear)
+        {
+            playSound(sound_box_locked, this.spawnPos);
+            return 0;
+        }
 
         playSound(sound_bonusbox, this.spawnPos);
 
@@ -656,7 +694,14 @@ class BonusBox extends GameObject {
             .5, 0, 1
         );
 
+        // IMPROVEMENT 5.4: count broken boxes for the "Boxed Up" achievement.
+        bonusBoxBreakCount += 1;
+        if (bonusBoxBreakCount >= 10)
+            unlockAchievement('boxed_10', 'Boxed Up');
+
         levelEndTimer.set();
+        if (bonusBoxRef === this)
+            bonusBoxRef = null;
         this.destroy();
         return 1;
     }
@@ -742,5 +787,60 @@ class WeaponPickup extends EngineObject {
         } else {
             drawRect(pos.add(vec2(0, .75)), vec2(.15, .4), c);   // tall spike = plasma
         }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// IMPROVEMENT 1.2: COLLECT objective — a small "stash" the player picks up
+// by walking into it. Bounded count per level (typically 3). On pickup
+// the global stashesCollected counter increments, and the areaClear
+// condition in app.js unlocks the BonusBox once the tally is met.
+
+class Stash extends GameObject {
+    constructor(pos)
+    {
+        super(pos, vec2(.5));
+        this.isStash     = 1;
+        this.gravityScale = 0;
+        this.bobTimer    = 0;
+        this.spawnPos    = pos.copy();
+        this.color       = new Color(.3, .6, 1);   // blue
+        this.renderOrder = 1e7;
+        this.setCollision(0, 0);                    // no physics, just proximity
+    }
+
+    update()
+    {
+        super.update();
+        this.bobTimer += 1 / 60;
+        // collect on player proximity
+        const p = players && players[0];
+        if (p && !p.isDead() && p.pos.distance(this.spawnPos) < 1)
+        {
+            stashesCollected += 1;
+            playSound(sound_jump, this.spawnPos);
+            // 12-particle cyan burst — bounded, no GC pressure
+            new ParticleEmitter(
+                this.spawnPos, .8, .2, 12, PI,
+                0, undefined,
+                new Color(.4, .8, 1), new Color(.2, .5, 1),
+                new Color(.4, .8, 1, 0), new Color(.2, .5, 1, 0),
+                .4, .3, 0, .15, .15,
+                1, 1, 0, PI, 0,
+                .5, 0, 1
+            );
+            this.destroy();
+        }
+    }
+
+    render()
+    {
+        // pulsing cyan diamond floating above the ground
+        const pulse = .5 + .5 * Math.sin(this.bobTimer * 3);
+        const pos = vec2(this.spawnPos.x, this.spawnPos.y + Math.sin(this.bobTimer * 4) * .25);
+        setBlendMode(1);
+        drawRect(pos, vec2(.55 * (1 + pulse * .2)), this.color.scale(1, .5 + pulse * .5));
+        setBlendMode(0);
+        drawRect(pos, vec2(.35, .35), this.color);
     }
 }

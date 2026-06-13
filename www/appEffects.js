@@ -24,6 +24,8 @@ const sound_rain =         [.02,,1e3,2,,2,,,,,,,,99];
 const sound_wind =         [.01,.3,2e3,2,1,2,,,,,,,1,2,,,,,,.1];
 const sound_grenade =      [.5,.01,300,,,.02,3,.22,,,-9,.2,,,,,,.5];
 const sound_bonusbox =     [1,.1,800,.01,.1,.4,1,2,,,400,.05,.1,,,,.1,.8,.05];
+const sound_box_locked =   [.4,.1,200,.02,.05,.1,2,1.5,,,,,,2,,.2];  // IMPROVEMENT 1.1: buzz when player shoots the BonusBox before clearing all enemies
+const sound_player_hit =   [.5,.2,400,.01,.05,.15,3,2.5,,,-100,.02,.3,1,4];  // IMPROVEMENT 2.2: short impact sound when the player takes damage
 
 ///////////////////////////////////////////////////////////////////////////////
 // special effects
