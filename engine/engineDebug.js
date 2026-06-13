@@ -11,7 +11,7 @@
 'use strict';
 
 const debug = 0;
-const enableAsserts = 1;
+const enableAsserts = debug; // Perf 8.1: compile out asserts in release builds
 const debugPointSize = .5;
 
 let showWatermark = 0;

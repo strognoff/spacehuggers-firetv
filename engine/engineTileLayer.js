@@ -53,6 +53,10 @@ function tileCollisionTest(pos, size=vec2(), object)
 
 // return the center of tile if any that is hit (this does not return the exact hit point)
 // todo: return the exact hit point, it must still be inside the hit tile
+// Perf 8.4: scratch Vector2 reused for raycast hit and debug point — avoids
+// two `new Vector2(...)` allocations per intersection.
+const _raycastHitPos = new Vector2(0, 0);
+const _raycastDebugPos = new Vector2(0, 0);
 function tileCollisionRaycast(posStart, posEnd, object)
 {
     // test if a ray collides with tiles from start to end
@@ -66,11 +70,12 @@ function tileCollisionRaycast(posStart, posEnd, object)
     for(let x = posStart.x, y = posStart.y;;)
     {
         const tileData = getTileCollisionData(vec2(x,y));
-        if (tileData && (object ? object.collideWithTileRaycast(tileData, new Vector2(x, y)) : tileData > 0))
+        if (tileData && (object ? object.collideWithTileRaycast(tileData, (_raycastHitPos.x = x, _raycastHitPos.y = y, _raycastHitPos)) : tileData > 0))
         {
             debugRaycast && debugLine(posStart, posEnd, '#f00',.02, 1);
-            debugRaycast && debugPoint(new Vector2(x+.5, y+.5), '#ff0', 1);
-            return new Vector2(x+.5, y+.5);
+            debugRaycast && debugPoint((_raycastDebugPos.x = x+.5, _raycastDebugPos.y = y+.5, _raycastDebugPos), '#ff0', 1);
+            _raycastHitPos.x = x+.5; _raycastHitPos.y = y+.5;
+            return _raycastHitPos;
         }
 
         // update Bresenham line drawing algorithm

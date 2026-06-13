@@ -54,7 +54,7 @@ function makeBlood(pos, amount=50)
 function makeFire(pos = vec2())
 {
     return new ParticleEmitter(
-        pos, 1, 0, lowGraphicsSettings ? 20 : 60, PI, // pos, emitSize, emitTime, emitRate, emiteCone
+        pos, 1, 0, lowGraphicsSettings ? 6 : 18, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         0, undefined,   // tileIndex, tileSize
         new Color(1,1,0), new Color(1,.5,.5), // colorStartA, colorStartB
         new Color(1,0,0), new Color(1,.5,.1), // colorEndA, colorEndB
@@ -72,7 +72,7 @@ function makeDebris(pos, color = new Color, amount = 50)
         color, color2,       // colorStartA, colorStartB
         color, color2,       // colorEndA, colorEndB
         .6, .2, .2, .1, .05, // particleTime(3→0.6s), sizeStart, sizeEnd, particleSpeed, particleAngleSpeed
-        1, .95, .4, PI, 0,  // damping, angleDamping, gravityScale, particleCone, fadeRate, 
+        1, .95, .4, PI, 0,  // damping, angleDamping, gravityScale, particleCone, fadeRate,
         .5, 0               // randomness, collide(1→0: no tile physics), additive, randomColorLinear, renderOrder
     );
     emitter.elasticity = .3;
@@ -133,7 +133,7 @@ function makeWater(pos, amount=400)
 // Without this, a grenade hitting 3 barrels each hitting 2 more can
 // spawn 7+ simultaneous explosions in under 500ms.
 let activeExplosions = 0;
-const maxChainExplosions = 4;
+const maxChainExplosions = 3;
 
 function explosion(pos, radius=2)
 {
@@ -191,12 +191,13 @@ function explosion(pos, radius=2)
 
     cameraShake = min(1, cameraShake + radius * 0.15);
 
-    // Keep particle counts low on all hardware — the emitters are the dominant
-    // per-frame cost during chain explosions. At radius=3: 30 smoke + 60 fire.
-    const smokeRate = lowGraphicsSettings ? 8*radius : 10*radius;
-    const fireRate  = lowGraphicsSettings ? 15*radius : 20*radius;
-    const smokeTime = lowGraphicsSettings ? .08 : .1;
-    const fireTime  = lowGraphicsSettings ? .04 : .06;
+    // Keep particle counts at the absolute minimum — the emitters are the
+    // dominant per-frame cost during chain explosions. At radius=3 (high
+    // explosive barrel): ~9 smoke + 6 fire particles, down from 18+30.
+    const smokeRate = lowGraphicsSettings ? 1*radius : 3*radius;
+    const fireRate  = lowGraphicsSettings ? 1*radius : 2*radius;
+    const smokeTime = lowGraphicsSettings ? .04 : .06;
+    const fireTime  = lowGraphicsSettings ? .02 : .03;
 
     // smoke
     new ParticleEmitter(

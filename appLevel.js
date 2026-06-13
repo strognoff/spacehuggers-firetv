@@ -682,7 +682,7 @@ function makeTileLayers(level_)
     // WebGL canvas at all. Restored immediately after so sprites/effects still
     // use WebGL for the rest of the frame.
     const _savedGlEnable = glEnable;
-    glEnable = 0;
+    glEnable = 1;
     tileLayer.redraw();
     tileBackgroundLayer.redraw();
     glEnable = _savedGlEnable;
@@ -730,7 +730,7 @@ function applyArtToLevel()
                 new Color(1,1,1,.8), new Color(1,1,1,.2), // colorEndA, colorEndB
                 3, .1, .1, .3, .01,  // particleTime, sizeStart, sizeEnd, particleSpeed, particleAngleSpeed
                 .98, 1, .2, PI, .2,  // damping, angleDamping, gravityScale, particleCone, fadeRate, 
-                .5, 1              // randomness, collide, additive, randomColorLinear, renderOrder
+                .5, 0              // randomness, collide=0 (no tile collision for snow, perf fix 4.2), additive, randomColorLinear, renderOrder
             );
         }
         skyParticles.emitRate = precipitationEnable && rand()<.5 ? rand(200) : 0;

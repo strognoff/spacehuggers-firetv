@@ -8,15 +8,16 @@
 
 const clampCamera = !debug;
 const lowGraphicsSettings = glOverlay = !window['chrome']; // only chromium uses high settings
-// Camera scale: 36px per world unit on start, 32px default for a wider TV-friendly view.
-const startCameraScale = 4*9;
-const defaultCameraScale = 4*8;
+// Camera scale: 18px per world unit on start, 16px default — 2x zoom-out
+// from the previous 36/32 values so the player sees twice as much of the world.
+const startCameraScale = 2*9;
+const defaultCameraScale = 2*8;
 const maxPlayers = 4;
 
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.80';
+const APP_VERSION = '1.0.86';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -139,8 +140,11 @@ const updateNameEntry = ()=>
         {
             addHighScore(nameEntryBuffer, nameEntryFinalScore, nameEntryFinalLevel);
             _cachedHighScores = null; // force cache refresh next time scoreboard opens
-            nameEntryActive = false;
-            nameEntryBuffer = '';
+            nameEntryActive       = false;
+            nameEntryBuffer       = '';
+            pauseAboutScreen      = false;
+            pauseScoreboardScreen = false;
+            _skyGradient          = null; // force sky gradient rebuild for the new level
             resetGame();
         }
         clearInput();
@@ -308,6 +312,10 @@ let _lastCanvasW = 0, _lastCanvasH = 0, _lastCamScale = 0;
 let _skyGradient = null, _skyGradientH = 0;
 // FIX 7.1: Cache scoreboard data — don't read localStorage every frame
 let _cachedHighScores = null;
+// FIX 8.5: Cache the bottom-of-screen controller-hint label — the input mode
+// only changes when the user switches input device, not per frame.
+let _hudHintLabel = '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move  [P] Pause';
+let _hudHintLabelMode = 0;
 
 engineInit(
 
@@ -552,6 +560,18 @@ engineInit(
 ///////////////////////////////////////////////////////////////////////////////
 ()=> // appRender
 {
+    // Fire TV / level-transition flash: generateLevel() destroyed the old
+    // TileLayers in appLevel.js:542 and finishLevelSetup() hasn't recreated
+    // the new ones yet (pendingApplyArt window, appUpdatePost at app.js:462).
+    // Without this, the new level's light-gray sky is rendered for ~83 ms
+    // with no terrain underneath, which reads as a white screen on TVs.
+    if (pendingApplyArt)
+    {
+        mainContext.fillStyle = '#000';
+        mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+        return;
+    }
+
     // FIX 2.6: Cache sky gradient — only recreate when canvas height changes
     if (!_skyGradient || mainCanvas.height !== _skyGradientH) {
         _skyGradientH = mainCanvas.height;
@@ -568,8 +588,19 @@ engineInit(
     // Fire TV / controller hint: show a small key-binding strip in the
     // bottom-left of the canvas. Switches between gamepad glyphs, the
     // Fire TV remote, and keyboard labels depending on the last input used.
+    // Perf 8.5: cache the label string — input mode changes at most once per
+    // session, so re-evaluating three ternaries per frame is wasted work.
     {
         const w = mainCanvas.width, h = mainCanvas.height;
+        if (_hudHintLabelMode !== (isUsingFireTVRemote ? 2 : isUsingGamepad ? 1 : 0))
+        {
+            _hudHintLabelMode = isUsingFireTVRemote ? 2 : isUsingGamepad ? 1 : 0;
+            _hudHintLabel = isUsingFireTVRemote
+                ? 'D-Pad Move  OK Shoot   \u275A\u275A Pause   \u23EA Grenade   \u23E9 Roll   (hold 3s after death to restart, press at level end to skip)'
+                : isUsingGamepad
+                    ? '[A] Shoot    [B] Roll    [X] Grenade    [Y] Thrust    D-Pad Move'
+                    : '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move  [P] Pause';
+        }
         mainContext.save();
         mainContext.globalAlpha = .7;
         mainContext.font = '24px arial';
@@ -577,12 +608,7 @@ engineInit(
         mainContext.fillStyle = '#fff';
         mainContext.shadowColor = 'rgba(0,0,0,0.95)';
         mainContext.shadowBlur = 8;
-        const label = isUsingFireTVRemote
-            ? 'D-Pad Move  OK Shoot   \u275A\u275A Pause   \u23EA Grenade   \u23E9 Roll   (hold 3s after death to restart, press at level end to skip)'
-            : isUsingGamepad
-                ? '[A] Shoot    [B] Roll    [X] Grenade    [Y] Thrust    D-Pad Move'
-                : '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move  [P] Pause';
-        mainContext.fillText(label, 16, h - 36);
+        mainContext.fillText(_hudHintLabel, 16, h - 36);
         mainContext.restore();
     }
 },

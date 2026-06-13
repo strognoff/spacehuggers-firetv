@@ -281,12 +281,17 @@ class Prop extends GameObject
  
     update()
     {
-        const oldVelocity = this.velocity.copy();
+        // Perf 8.2: skip oldVelocity capture for static (mass=0) props — they
+        // never collide with anything by velocity, so the copy was pure waste.
+        const oldVelocity = this.mass > 0 ? this.velocity.copy() : this.velocity;
         super.update();
 
         // apply collision damage
-        const deltaSpeedSquared = this.velocity.subtract(oldVelocity).lengthSquared();
-        deltaSpeedSquared > .05 && this.damage(2*deltaSpeedSquared);
+        if (this.mass > 0)
+        {
+            const deltaSpeedSquared = this.velocity.subtract(oldVelocity).lengthSquared();
+            deltaSpeedSquared > .05 && this.damage(2*deltaSpeedSquared);
+        }
     }
 
     damage(damage, damagingObject)
@@ -640,15 +645,15 @@ class BonusBox extends GameObject {
 
         playSound(sound_bonusbox, this.spawnPos);
 
-        // celebratory burst
+        // celebratory burst — minimized to keep memory/CPU low (was 80 particles).
         new ParticleEmitter(
-            this.spawnPos, 1.2, .3, 300, PI,
+            this.spawnPos, 1.2, .15, lowGraphicsSettings ? 10 : 18, PI,
             0, undefined,
             this.boxColor, new Color(1,1,1,.8),
             this.boxColor.scale(1,.5), new Color(1,1,0,0),
-            .6, .4, .05, .3, .2,
+            .5, .35, .05, .25, .2,
             .95, .8, .2, PI, .3,
-            .6, 0, 1
+            .5, 0, 1
         );
 
         levelEndTimer.set();
@@ -660,8 +665,11 @@ class BonusBox extends GameObject {
     {
         super.update();
         this.bobTimer += 1 / 60;
-        // Anchor position to spawnPos so no drift from physics interactions.
-        this.pos = this.spawnPos.add(vec2(0, Math.sin(this.bobTimer * 4) * .3));
+        // Perf 8.6: write bob directly to this.pos — avoids 2 Vector2 allocs/frame
+        // from `spawnPos.add(vec2(...))`. spawnPos is the stable reference, the
+        // additive stays in pos.x/pos.y and is recomputed from the timer each tick.
+        this.pos.x = this.spawnPos.x;
+        this.pos.y = this.spawnPos.y + Math.sin(this.bobTimer * 4) * .3;
     }
 
     render()
