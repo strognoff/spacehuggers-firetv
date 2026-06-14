@@ -6,18 +6,38 @@
 
 'use strict';
 
+// Polyfill CanvasRenderingContext2D.roundRect for Fire TV WebView / Chromium < 99.
+// Without this, every pause sub-screen (Achievements, Stats, Scoreboard, About)
+// throws "TypeError: mainContext.roundRect is not a function" and crashes.
+if (typeof CanvasRenderingContext2D !== 'undefined' && !CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+        const radius = Math.min(typeof r === 'number' ? r : (Array.isArray(r) ? r[0] : 0), w / 2, h / 2);
+        this.moveTo(x + radius, y);
+        this.lineTo(x + w - radius, y);
+        this.arcTo(x + w, y,     x + w, y + radius,     radius);
+        this.lineTo(x + w, y + h - radius);
+        this.arcTo(x + w, y + h, x + w - radius, y + h, radius);
+        this.lineTo(x + radius, y + h);
+        this.arcTo(x,     y + h, x,     y + h - radius, radius);
+        this.lineTo(x, y + radius);
+        this.arcTo(x,     y,     x + radius, y,          radius);
+        this.closePath();
+        return this;
+    };
+}
+
 const clampCamera = !debug;
 const lowGraphicsSettings = glOverlay = !window['chrome']; // only chromium uses high settings
 // Camera scale: 18px per world unit on start, 16px default — 2x zoom-out
-// from the previous 36/32 values so the player sees twice as much of the world.
-const startCameraScale = 2*9;
-const defaultCameraScale = 2*8;
+// Zoom: 2x from the zoomed-out 18/16 values — restores original 36/32 scale.
+const startCameraScale = 2*18;
+const defaultCameraScale = 2*16;
 const maxPlayers = 4;
 
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.95';
+const APP_VERSION = '1.0.105';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -258,6 +278,7 @@ const queueGameRestart = ()=>
     restartQueued            = true;
     nameEntryActive          = false;
     nameEntryBuffer          = '';
+    _nameEntryHintLen        = -1;   // reset hint cache so next session starts fresh
     pauseAboutScreen         = false;
     pauseScoreboardScreen    = false;
     _cachedHighScores        = null;
@@ -372,7 +393,7 @@ const hudText = (txt, x, y, size, color='#fff', align='left') => {
     mainContext.textBaseline  = 'middle';
     mainContext.fillStyle     = color;
     mainContext.shadowColor   = 'rgba(0,0,0,0.95)';
-    mainContext.shadowBlur    = 10;
+    mainContext.shadowBlur    = lowGraphicsSettings ? 0 : 10;
     mainContext.fillText(txt, x, y);
     mainContext.fillStyle     = _pf;
     mainContext.textAlign     = _pa;
@@ -390,7 +411,7 @@ const hudMonoText = (txt, x, y, size, color='#fff', align='left', bold=0) => {
     mainContext.textBaseline  = 'middle';
     mainContext.fillStyle     = color;
     mainContext.shadowColor   = color;
-    mainContext.shadowBlur    = bold ? 8 : 4;
+    mainContext.shadowBlur    = lowGraphicsSettings ? 0 : (bold ? 8 : 4);
     mainContext.fillText(txt, x, y);
     mainContext.fillStyle     = _pf;
     mainContext.textAlign     = _pa;
@@ -426,6 +447,12 @@ const hudFrame = (x, y, w, h, color, alpha=.65) => {
     mainContext.shadowBlur  = _psb;
 };
 
+// Hint string cache for drawNameEntry — rebuilt only when the buffer changes,
+// not every frame.  On Fire TV string concatenation allocates heap strings
+// which trigger incremental GC and cause sustained frame drops.
+let _nameEntryHintCache = '';
+let _nameEntryHintLen   = -1;   // buffer length that produced the cached hint
+
 // Render the name-entry overlay. Replaces the GAME OVER panel while active.
 const drawNameEntry = ()=>
 {
@@ -434,7 +461,7 @@ const drawNameEntry = ()=>
     // dim
     mainContext.fillStyle = 'rgba(0,0,0,.78)';
     mainContext.fillRect(0, 0, cw, ch);
-    // panel
+    // panel — single save/restore for the whole panel, no per-key saves
     mainContext.save();
     mainContext.fillStyle = 'rgba(10,10,30,0.95)';
     mainContext.beginPath();
@@ -442,6 +469,7 @@ const drawNameEntry = ()=>
     mainContext.fill();
     mainContext.strokeStyle = '#665';
     mainContext.lineWidth = 2;
+    mainContext.shadowBlur = 0;   // never blur here — Fire TV software-renders shadow
     mainContext.stroke();
     mainContext.restore();
 
@@ -449,34 +477,45 @@ const drawNameEntry = ()=>
     hudText('Score: ' + nameEntryFinalScore + '   \u00B7   Level ' + nameEntryFinalLevel,
             cx, cy - 155, 18, '#aaa', 'center');
 
-    // buffer display — three slots, fills with typed chars
+    // buffer display — three slots (no save/restore per slot)
     const slotW = 60, slotH = 70, slotGap = 12;
     const slotsTotalW = slotW * 3 + slotGap * 2;
     const slotY = cy - 110;
     const slotX0 = cx - slotsTotalW/2;
+    mainContext.lineWidth = 1;
+    mainContext.strokeStyle = '#556';
     for (let i = 0; i < 3; i++)
     {
         const sx = slotX0 + i * (slotW + slotGap);
-        mainContext.save();
         mainContext.fillStyle = 'rgba(255,255,255,0.05)';
         mainContext.beginPath();
         mainContext.roundRect(sx, slotY, slotW, slotH, 8);
         mainContext.fill();
-        mainContext.strokeStyle = '#556';
-        mainContext.lineWidth = 1;
         mainContext.stroke();
-        mainContext.restore();
-        const ch = nameEntryBuffer[i];
-        if (ch) hudText(ch, sx + slotW/2, slotY + slotH/2, 44, '#ffe066', 'center');
+        const sc = nameEntryBuffer[i];
+        if (sc) hudText(sc, sx + slotW/2, slotY + slotH/2, 44, '#ffe066', 'center');
     }
-    // typing hint
-    const hint = nameEntryBuffer.length === 0
-        ? 'Pick letters to enter your name'
-        : (nameEntryBuffer.length < 3 ? (3 - nameEntryBuffer.length) + ' more letter' + (3 - nameEntryBuffer.length === 1 ? '' : 's') + ' (or OK to confirm \"' + nameEntryBuffer + '\")'
-                                     : 'Press OK to save');
-    hudText(hint, cx, cy - 18, 16, '#8ef', 'center');
 
-    // keyboard grid
+    // Hint string — cached by buffer length so no string allocation per frame.
+    const bufLen = nameEntryBuffer.length;
+    if (bufLen !== _nameEntryHintLen)
+    {
+        _nameEntryHintLen = bufLen;
+        if (bufLen === 0)
+            _nameEntryHintCache = 'Pick letters to enter your name';
+        else if (bufLen < 3)
+        {
+            const rem = 3 - bufLen;
+            _nameEntryHintCache = rem + ' more letter' + (rem === 1 ? '' : 's') +
+                                  ' (or OK to confirm "' + nameEntryBuffer + '")';
+        }
+        else
+            _nameEntryHintCache = 'Press OK to save';
+    }
+    hudText(_nameEntryHintCache, cx, cy - 18, 16, '#8ef', 'center');
+
+    // keyboard grid — no save()/restore() per key (33 pairs → 0 pairs per frame).
+    // Directly set the properties that change per key instead.
     const keyW = 48, keyH = 48, keyGap = 8;
     const gridW = keyW * KBD_COLS + keyGap * (KBD_COLS - 1);
     const gridX0 = cx - gridW/2;
@@ -489,18 +528,15 @@ const drawNameEntry = ()=>
             const ky = gridY + r * (keyH + keyGap);
             const sel = (r === nameEntryRow && c === nameEntryCol);
             const label = kbdKey(r, c);
-            mainContext.save();
-            mainContext.fillStyle = sel ? 'rgba(255,224,102,0.25)' : 'rgba(255,255,255,0.06)';
+            mainContext.fillStyle   = sel ? 'rgba(255,224,102,0.25)' : 'rgba(255,255,255,0.06)';
+            mainContext.strokeStyle = sel ? '#ffe066' : '#445';
+            mainContext.lineWidth   = sel ? 2 : 1;
             mainContext.beginPath();
             mainContext.roundRect(kx, ky, keyW, keyH, 8);
             mainContext.fill();
-            mainContext.strokeStyle = sel ? '#ffe066' : '#445';
-            mainContext.lineWidth = sel ? 2 : 1;
             mainContext.stroke();
-            mainContext.restore();
-            // use a smaller font for BKSP so the glyph fits
-            const isBksp = label === '\u232B';
-            hudText(label || '', kx + keyW/2, ky + keyH/2, isBksp ? 24 : 28,
+            hudText(label || '', kx + keyW/2, ky + keyH/2,
+                    label === '\u232B' ? 24 : 28,
                     sel ? '#ffe066' : '#ddd', 'center');
         }
     }
@@ -525,6 +561,10 @@ let _cachedHighScores = null;
 // only changes when the user switches input device, not per frame.
 let _hudHintLabel = '[Z] Shoot  [X] Roll  [C] Grenade  WASD/D-Pad Move  [P] Pause';
 let _hudHintLabelMode = 0;
+// Cache for the pause-menu inner-highlight gradient — createLinearGradient()
+// allocates a CanvasGradient object; calling it every frame while paused was
+// a steady source of GC pressure on Fire TV.
+let _pauseGrad = null, _pauseGradPY = NaN;
 
 engineInit(
 
@@ -705,6 +745,7 @@ engineInit(
             nameEntryCol      = 0;
             nameEntryFinalScore = finalScore;
             nameEntryFinalLevel = level;
+            clearInput();  // consume the OK press so it doesn't fire inside updateNameEntry() next frame
         }
         else
         {
@@ -765,7 +806,11 @@ engineInit(
         }
     }
 
-    if (players.length == 1)
+    // Don't lerp on the frame finishLevelSetup() is about to fire — that
+    // function snaps cameraPos to the spawn point in appUpdatePost(), but
+    // appUpdate() runs first. If we lerp here with stale/origin coords we
+    // undo the snap before it has any effect, causing a 1-frame camera jump.
+    if (!pendingApplyArt && players.length == 1)
     {
         const player = players[0];
         if (!player.isDead())
@@ -1495,54 +1540,118 @@ engineInit(
         }
         else
         {
-            // ── Main pause panel ──────────────────────────────────────────────
+            // ── Main pause panel — compact sidebar style ───────────────────────
+            // Layout constants — all derived so the panel auto-sizes to its items.
+            const items = [
+                { icon: '\u25B6', label: 'Resume',       sub: '',                                  color: '#e8e8ff' },
+                { icon: '\u266A', label: 'Music',        sub: musicMuted ? 'OFF' : 'ON',           color: musicMuted ? '#f88' : '#7fff7f' },
+                { icon: '\u21BA', label: 'Restart',      sub: '',                                  color: '#ffaaaa' },
+                { icon: '\u25A6', label: 'Stats',        sub: '',                                  color: '#7fdbff' },
+                { icon: '\u2605', label: 'Scoreboard',   sub: '',                                  color: '#ffc85e' },
+                { icon: '\u25CE', label: 'Achievements', sub: Object.keys(unlockedAchievements).length + '/' + ACHIEVEMENTS.length, color: '#ffe066' },
+                { icon: '\u2139', label: 'About',        sub: '',                                  color: '#a8daff' },
+            ];
+
+            const ROW_H   = 42;   // height of each menu row
+            const PAD_X   = 22;   // horizontal inner padding
+            const PAD_TOP = 52;   // space above first row (header)
+            const PAD_BOT = 36;   // space below last row (hint)
+            const PW      = 290;  // panel width
+            const PH      = PAD_TOP + items.length * ROW_H + PAD_BOT;
+            const px      = cx - PW / 2;   // panel left edge
+            const py      = cy - PH / 2;   // panel top edge
+
+            // Panel background — dark glass with a subtle blue tint
             mainContext.save();
-            mainContext.fillStyle = 'rgba(10,10,30,0.92)';
+            mainContext.fillStyle = 'rgba(6,8,22,0.94)';
             mainContext.beginPath();
-            mainContext.roundRect(cx - 280, cy - 210, 560, 420, 20);
+            mainContext.roundRect(px, py, PW, PH, 14);
             mainContext.fill();
-            mainContext.strokeStyle = '#445';
-            mainContext.lineWidth = 2;
+            // thin border
+            mainContext.strokeStyle = 'rgba(80,100,160,0.6)';
+            mainContext.lineWidth = 1.5;
             mainContext.stroke();
             mainContext.restore();
 
-            hudText('PAUSED', cx, cy - 158, 52, '#fff', 'center');
-
-            // gold divider under title
+            // Subtle inner-highlight fade — gradient cached so createLinearGradient()
+            // is not called every frame while the pause menu is open.
+            if (!_pauseGrad || _pauseGradPY !== py) {
+                _pauseGradPY = py;
+                _pauseGrad = mainContext.createLinearGradient(px, py, px, py + PH * 0.35);
+                _pauseGrad.addColorStop(0, 'rgba(255,255,255,0.04)');
+                _pauseGrad.addColorStop(1, 'rgba(255,255,255,0)');
+            }
             mainContext.save();
-            mainContext.strokeStyle = '#334';
+            mainContext.fillStyle = _pauseGrad;
+            mainContext.beginPath();
+            mainContext.roundRect(px + 1, py + 1, PW - 2, PH * 0.35, 13);
+            mainContext.fill();
+            mainContext.restore();
+
+            // Header — "II PAUSED" with a thin cyan top-bar accent
+            mainContext.save();
+            mainContext.fillStyle = '#7fdbff';
+            mainContext.fillRect(px + PAD_X, py + 10, 28, 3);   // left accent tick
+            mainContext.fillRect(px + PW - PAD_X - 28, py + 10, 28, 3); // right accent tick
+            mainContext.restore();
+            hudText('II  PAUSED', cx, py + 28, 18, 'rgba(180,210,255,0.9)', 'center');
+
+            // Thin divider under header
+            mainContext.save();
+            mainContext.strokeStyle = 'rgba(80,100,160,0.45)';
             mainContext.lineWidth = 1;
             mainContext.beginPath();
-            mainContext.moveTo(cx - 220, cy - 122);
-            mainContext.lineTo(cx + 220, cy - 122);
+            mainContext.moveTo(px + PAD_X, py + PAD_TOP - 6);
+            mainContext.lineTo(px + PW - PAD_X, py + PAD_TOP - 6);
             mainContext.stroke();
             mainContext.restore();
 
-            const items = [
-                { label: '\u25B6  Resume',                                        color: '#fff'  },
-                { label: (musicMuted ? '\uD83D\uDD07  Music: OFF' : '\uD83D\uDD0A  Music: ON'), color: musicMuted ? '#f88' : '#8f8' },
-                { label: '\u21BA  Restart Game',                                  color: '#faa'  },
-                { label: '\uD83D\uDCCA  Stats',                                   color: '#7fdbff' },
-                { label: '\uD83C\uDFC6  Scoreboard',                              color: '#fc6'  },
-                { label: '\uD83C\uDFAF  Achievements',                            color: '#ffe066' },
-                { label: '\u2139\uFE0F  About',                                   color: '#adf'  },
-            ];
+            // Menu rows
             items.forEach((item, idx) => {
-                const iy  = cy - 100 + idx * 58;
+                const ry  = py + PAD_TOP + idx * ROW_H;
                 const sel = pauseMenuOption === idx;
+                const mid = ry + ROW_H / 2;
+
                 if (sel) {
+                    // Selected row: subtle fill + left neon accent bar
                     mainContext.save();
-                    mainContext.fillStyle = 'rgba(255,255,255,0.10)';
+                    mainContext.fillStyle = 'rgba(127,219,255,0.08)';
                     mainContext.beginPath();
-                    mainContext.roundRect(cx - 220, iy - 22, 440, 44, 10);
+                    mainContext.roundRect(px + 6, ry + 3, PW - 12, ROW_H - 6, 7);
                     mainContext.fill();
+                    // left accent bar — neon cyan glow
+                    mainContext.fillStyle = '#7fdbff';
+                    mainContext.shadowColor = '#7fdbff';
+                    mainContext.shadowBlur  = 8;
+                    mainContext.fillRect(px + 6, ry + 7, 3, ROW_H - 14);
                     mainContext.restore();
                 }
-                hudText((sel ? '\u203A ' : '  ') + item.label, cx, iy, 26,
-                        sel ? '#ffe066' : item.color, 'center');
+
+                // Icon (monospace, dim when not selected)
+                hudText(item.icon, px + PAD_X + 14, mid, 16,
+                        sel ? '#7fdbff' : 'rgba(140,160,200,0.55)', 'center');
+
+                // Label
+                hudText(item.label, px + PAD_X + 28, mid, sel ? 18 : 17,
+                        sel ? '#ffe066' : item.color, 'left');
+
+                // Sub-label badge (e.g. ON/OFF, 2/8)
+                if (item.sub) {
+                    const badgeX = px + PW - PAD_X;
+                    const badgeColor = idx === 1
+                        ? (musicMuted ? 'rgba(255,120,120,0.85)' : 'rgba(120,255,140,0.85)')
+                        : 'rgba(180,200,230,0.7)';
+                    hudText(item.sub, badgeX, mid, 13, badgeColor, 'right');
+                }
+
+                // Selection arrow
+                if (sel)
+                    hudText('\u203A', px + PW - PAD_X + 2, mid, 18, 'rgba(127,219,255,0.7)', 'right');
             });
 
-            hudText('\u2191\u2193 Navigate   OK Confirm', cx, cy + 188, 18, 'rgba(140,140,170,0.8)', 'center');
+            // Hint strip at the bottom of the panel
+            hudText('\u2191\u2193  Navigate     OK  Select',
+                    cx, py + PH - 14, 11, 'rgba(110,130,170,0.65)', 'center');
         }
     }
 
@@ -1558,7 +1667,7 @@ engineInit(
         mainContext.fillStyle = 'rgba(0,0,0,0.78)';
         mainContext.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
 
-        // panel background
+        // panel background — no shadowBlur on stroke (software-rendered on Fire TV every frame)
         mainContext.save();
         mainContext.fillStyle = 'rgba(10,10,30,0.95)';
         mainContext.beginPath();
@@ -1566,8 +1675,7 @@ engineInit(
         mainContext.fill();
         mainContext.strokeStyle = '#b8860b';
         mainContext.lineWidth = 2.5;
-        mainContext.shadowColor = '#ffe066';
-        mainContext.shadowBlur = 14;
+        mainContext.shadowBlur = 0;
         mainContext.stroke();
         mainContext.restore();
 

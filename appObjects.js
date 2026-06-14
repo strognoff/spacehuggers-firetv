@@ -358,8 +358,8 @@ class Checkpoint extends GameObject
         const height = 4;
         const color = activeCheckpoint == this ? new Color(1,0,0) : new Color;
         const a = Math.sin(time*4+this.pos.x);
-        drawTile(this.pos.add(vec2(.5,height-.3-.5-.03*a)), vec2(1,.6), 14, undefined, color, a*.06);  
-        drawRect(this.pos.add(vec2(0,height/2-.5)), vec2(.1,height), new Color(.9,.9,.9));
+        drawTile(this.pos.add(vec2(.5,height-.3-.5-.03*a)), vec2(1,.6), 14, undefined, color, a*.06);
+        drawRect(this.pos.add(vec2(.5,height/2-.5)), vec2(.1,height), new Color(.9,.9,.9));
     }
 }
 

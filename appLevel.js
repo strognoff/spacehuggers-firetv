@@ -352,6 +352,132 @@ function buildTerrain(size)
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Reachability helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Cached Uint8Array from generateLevel() so finishLevelSetup() can reuse it
+// without running a second BFS. Cleared at the start of each generateLevel().
+let _reachableCache = null;
+
+// BFS flood-fill of all tile positions the player can physically reach from
+// checkpointPos.  Returns a Uint8Array[W*H] — index y*W+x is 1 if reachable.
+//
+// Typed-array implementation — NO string allocations, NO vec2 object creation
+// for the queue.  The old Set<"x,y"> + vec2[] version allocated ~80 000 short-
+// lived objects per call causing 1–2 s GC pauses on Fire TV (key event latency
+// 1000–1250 ms, dropped=3119 frames in the fluidity logs).
+//
+// Movement model:
+//   Walk  — left/right when standing on solid/ladder ground
+//   Jump  — one tile up from a standing tile
+//   Fall  — one tile downward when open below
+//   Climb — up and down through ladder tiles
+function reachableTiles()
+{
+    const W = levelSize.x | 0;
+    const H = levelSize.y | 0;
+
+    // Visited flags — Uint8Array, preallocated, zero-filled by the runtime.
+    const visited = new Uint8Array(W * H);
+
+    // Integer queue: each entry encodes a tile as y*W+x (flat index).
+    // Uint32Array preallocated to the maximum possible queue size.
+    const queue = new Int32Array(W * H);
+    let head = 0, tail = 0;
+
+    // Inline helpers using raw integer coordinates — no vec2, no string concat.
+    const inBounds  = (x, y) => x >= 0 && x < W && y >= 0 && y < H;
+    const tileAt    = (x, y) => inBounds(x, y) ? getTileCollisionData(vec2(x, y)) : 1; // treat OOB as solid
+    const isOpen    = (x, y) => tileAt(x, y) <= 0;
+    const isSolid   = (x, y) => tileAt(x, y) > 0;
+    const isLadder  = (x, y) => tileAt(x, y) === tileType_ladder;
+
+    const enqueue = (x, y) =>
+    {
+        if (!inBounds(x, y)) return;
+        const i = y * W + x;
+        if (visited[i] || !isOpen(x, y)) return;
+        visited[i] = 1;
+        queue[tail++] = i;
+    };
+
+    // Seed — player spawn tile
+    const sx = checkpointPos.x | 0;
+    const sy = checkpointPos.y | 0;
+    if (inBounds(sx, sy) && isOpen(sx, sy))
+    {
+        visited[sy * W + sx] = 1;
+        queue[tail++] = sy * W + sx;
+    }
+
+    while (head < tail)
+    {
+        const i = queue[head++];
+        const x = i % W;
+        const y = (i / W) | 0;
+
+        const onLadder  = isLadder(x, y);
+        const canStand  = isSolid(x, y - 1) || isLadder(x, y - 1) || onLadder;
+
+        if (canStand)
+        {
+            enqueue(x - 1, y);
+            enqueue(x + 1, y);
+            enqueue(x,     y + 1);          // jump 1 tile up
+            enqueue(x - 1, y + 1);
+            enqueue(x + 1, y + 1);
+        }
+
+        enqueue(x, y - 1);                  // gravity / fall
+
+        if (onLadder)
+        {
+            enqueue(x, y + 1);
+            enqueue(x, y - 1);
+        }
+    }
+
+    return visited; // Uint8Array — caller uses visited[y*W+x] === 1
+}
+
+// Ensure the tile at surfacePos is reachable.  If not, scan downward to find
+// the nearest reachable tile and write ladder tiles for the whole gap.
+// `reachable` is the Uint8Array returned by reachableTiles().
+function connectToReachable(surfacePos, reachable)
+{
+    const W  = levelSize.x | 0;
+    const sx = surfacePos.x | 0;
+    const sy = surfacePos.y | 0;
+
+    if (sx < 0 || sx >= W || sy < 0 || sy >= levelSize.y) return;
+    if (reachable[sy * W + sx]) return;     // already reachable
+
+    for (let dy = 1; dy < levelSize.y; ++dy)
+    {
+        const ty = sy - dy;
+        if (ty < 2) break;
+
+        const tileD = getTileCollisionData(vec2(sx, ty));
+        if (tileD > 0 && tileD !== tileType_ladder) break;  // solid wall blocks shaft
+
+        if (reachable[ty * W + sx])
+        {
+            // Bridge the gap with ladder tiles and mark them reachable.
+            for (let fy = ty + 1; fy <= sy; ++fy)
+            {
+                if (getTileCollisionData(vec2(sx, fy)) <= 0)
+                    setTileCollisionData(vec2(sx, fy), tileType_ladder);
+            }
+            for (let fy = ty; fy <= sy; ++fy)
+                reachable[fy * W + sx] = 1;
+            return;
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function spawnProps(pos)
 {
     if (abs(checkpointPos.x-pos.x) > 5)
@@ -464,31 +590,58 @@ function buildBase()
             }
         }
 
-        // add ladders to floor below
+        // add ladders to floor below — guaranteed to write at least one per floor.
+        //
+        // Old code picked a random X once and silently gave up if that column was
+        // blocked (wall tile, zero gap, or hit world bottom), leaving entire floors
+        // disconnected. New code retries up to 10 random candidates, then falls back
+        // to a deterministic center-outward scan of the full floor width so that
+        // *at least one* ladder is always written (unless this is a cave top-floor).
         if (!cave || !topFloor)
-        for(let ladderCount=randSeeded(2)+1|0;ladderCount--;)
         {
-            const x = randSeeded(floorWidth-1, -floorWidth+1)|0;
-            const pos = floorBottomCenterPos.add(vec2(x,-2));
-
-            let y=0;
-            let hitBottom = 0;
-            for(; y < levelSize.y; ++y)
+            // tryPlaceLadder: scan downward from floorBottomCenterPos at column x.
+            // Returns true and writes ladder tiles if a solid-below/open-above pair
+            // is found within the level.  Returns false if the column is blocked.
+            const tryPlaceLadder = (fbcp, x) =>
             {
-                const pos = floorBottomCenterPos.add(vec2(x,-y-1));
-                if (pos.y < 2)
+                for (let y = 0; y < levelSize.y; ++y)
                 {
-                    // hit bottom, no ladder
-                    break;
-                }
-                if (y && getTileCollisionData(pos) > 0 && getTileCollisionData(pos.add(vec2(0,1))) <= 0 )
-                {
-                    for(;y--;)
+                    const lp = fbcp.add(vec2(x, -y - 1));
+                    if (lp.y < 2) return false;           // hit world bottom, give up
+                    if (y                                  // need at least 1 empty tile first
+                        && getTileCollisionData(lp) > 0    // solid tile found below gap
+                        && getTileCollisionData(lp.add(vec2(0,1))) <= 0) // open above it
                     {
-                        const pos = floorBottomCenterPos.add(vec2(x,-y-1));
-                        setTileCollisionData(pos, tileType_ladder);
+                        for (let ly = y; ly--;)
+                            setTileCollisionData(fbcp.add(vec2(x, -ly - 1)), tileType_ladder);
+                        return true;
                     }
-                    break;
+                }
+                return false;
+            };
+
+            // Place 1–2 ladders.  Each ladder gets up to 10 random attempts before
+            // the fallback deterministic scan ensures one always succeeds.
+            const ladderCount = (randSeeded(2) + 1) | 0;
+            for (let lc = 0; lc < ladderCount; ++lc)
+            {
+                let placed = false;
+
+                // Random attempts first (preserves original feel when they work).
+                for (let attempt = 0; attempt < 10 && !placed; ++attempt)
+                {
+                    const x = (randSeeded(floorWidth - 1, -floorWidth + 1)) | 0;
+                    placed = tryPlaceLadder(floorBottomCenterPos, x);
+                }
+
+                // Deterministic fallback: scan every interior column center-outward.
+                if (!placed)
+                {
+                    for (let dx = 0; dx <= floorWidth - 2 && !placed; ++dx)
+                    {
+                        placed = tryPlaceLadder(floorBottomCenterPos,  dx) ||
+                                 tryPlaceLadder(floorBottomCenterPos, -dx);
+                    }
                 }
             }
         }
@@ -560,7 +713,10 @@ function generateLevel()
         checkpointPos = vec2(levelSize.x/2 + (levelSize.x/2-10-randSeeded(9))*(randSeeded()<.5?-1:1) | 0, levelSize.y);
         raycastHit = tileCollisionRaycast(checkpointPos, vec2(checkpointPos.x, 0));
     }
-    checkpointPos = raycastHit.add(vec2(0,1));
+    // Snap to the same integer+0.5 coords the Checkpoint constructor uses
+    // (pos.int().add(vec2(.5))) so the player and the flag pole share the
+    // exact same X position and don't appear misaligned.
+    checkpointPos = raycastHit.add(vec2(0,1)).int().add(vec2(.5));
 
     // random bases until there enough enemies
     for(let tries=99;levelEnemyCount>0;)
@@ -586,6 +742,17 @@ function generateLevel()
             new Checkpoint(pos);
         }
     }
+
+    // ── Reachability pass ────────────────────────────────────────────────────
+    // Compute once here (Uint8Array, typed — zero GC pressure) and cache in
+    // _reachableCache so finishLevelSetup() can reuse it for BonusBox / Stash
+    // placement without running a second BFS.
+    _reachableCache = reachableTiles();
+    for (const enemy of liveEnemies)
+    {
+        if (!enemy || enemy.destroyed) continue;
+        connectToReachable(vec2(enemy.pos.x | 0, enemy.pos.y | 0), _reachableCache);
+    }
 }
 
 const groundTileStart = 8;
@@ -610,7 +777,7 @@ function makeTileLayers(level_)
             // todo pick tile, direction etc based on neighbors tile type
             let direction = rand(4)|0
             let mirror = rand(2)|0;
-            let color;
+            let color = new Color();
 
             let tileIndex = groundTileStart;
             if (tileType == tileType_dirt)
@@ -778,6 +945,22 @@ function finishLevelSetup()
         }
     });
 
+    // ── Reachability set for BonusBox / Stash placement ─────────────────────
+    // Reuse the Uint8Array computed in generateLevel() — no second BFS needed.
+    // The cache is valid: tile collision data hasn't changed since generateLevel()
+    // wrote it, and applyArtToLevel() only reads it (never writes it).
+    const _finishReachable = _reachableCache;
+    const _frW = levelSize.x | 0;
+    const isReachableSurface = (hitPos) =>
+    {
+        // hitPos is the floor tile (solid). The object stands one tile above it.
+        const standX = hitPos.x | 0;
+        const standY = (hitPos.y + 1) | 0;
+        if (!_finishReachable || standX < 0 || standX >= _frW ||
+            standY < 0 || standY >= levelSize.y) return false;
+        return _finishReachable[standY * _frW + standX] === 1;
+    };
+
     // ── Spawn the level finale — boss on every 5th level, otherwise BonusBox ─
     // IMPROVEMENT 5.3: every 5th level spawns a Boss instead of the BonusBox.
     // The Boss drops the BonusBox at its death position when killed.
@@ -790,14 +973,18 @@ function finishLevelSetup()
     }
     else
     {
-        for (let tries = 20; tries--;)
+        // Prefer a reachable surface; fall back to any valid surface after 40 tries.
+        let bonusPlaced = false;
+        for (let tries = 40; tries-- && !bonusPlaced;)
         {
             const bx = rand(levelSize.x - 20, 20);
             const hit = tileCollisionRaycast(vec2(bx, levelSize.y), vec2(bx, 0));
             if (hit && abs(checkpointPos.x - bx) > 15)
             {
+                // First 20 tries: require reachable. Last 20: accept any surface.
+                if (tries >= 20 && !isReachableSurface(hit)) continue;
                 new BonusBox(hit.add(vec2(0, 2)), randColor(new Color(.5,.5,.2), new Color(1,1,.6)));
-                break;
+                bonusPlaced = true;
             }
         }
     }
@@ -808,14 +995,16 @@ function finishLevelSetup()
     {
         for (let i = 0; i < stashesRequired; ++i)
         {
-            for (let tries = 20; tries--;)
+            let stashPlaced = false;
+            for (let tries = 40; tries-- && !stashPlaced;)
             {
                 const sx = rand(levelSize.x - 20, 20);
                 const hit = tileCollisionRaycast(vec2(sx, levelSize.y), vec2(sx, 0));
                 if (hit && abs(checkpointPos.x - sx) > 10)
                 {
+                    if (tries >= 20 && !isReachableSurface(hit)) continue;
                     new Stash(hit.add(vec2(0, 1.5)));
-                    break;
+                    stashPlaced = true;
                 }
             }
         }
@@ -832,6 +1021,12 @@ function finishLevelSetup()
         players[0].weapon.weaponType = weaponType_pistol;
     }
     //new Enemy(checkpointPos.add(vec2(3))); // test enemy
+
+    // Snap the camera directly to the spawn point so the player never sees
+    // the wrong part of the map (e.g. empty space / no ground) on the first
+    // frame. Without this cameraPos starts at (0,0) and takes several frames
+    // to lerp to the player position, making the character appear to float.
+    cameraPos = checkpointPos.copy();
 }
 
 // IMPROVEMENT 5.2: daily-seed mode. When enabled, every player gets the
@@ -888,23 +1083,24 @@ function nextLevel()
         // IMPROVEMENT 5.4: Marathon achievement on reaching level 20.
         if (level >= 20)
             unlockAchievement('marathon', 'Marathon');
-        levelEnemyCount = 15 + min(level * 30, 300);
+        // Cap enemy count on Fire TV — the formula can reach 315 on later
+        // levels; each enemy is a physics object updated every frame.
+        // 60 keeps the game challenging while staying within Fire TV's budget.
+        levelEnemyCount = lowGraphicsSettings
+            ? min(level * 7, 63)   // multiples of 7: 7, 14, 21 … 63 (cap at 9×7)
+            : 15 + min(level * 30, 300);
         ++level;
         // IMPROVEMENT 4.4: arm the "LEVEL N" title card for the new level.
         levelTitleTimer = 1.5;
         // IMPROVEMENT 1.2: pick an objective type for this level. The mix is
         // 60% HUNT (default), 30% SURVIVE, 10% COLLECT. The survive time
         // scales with the level so late-game SURVIVE/COLLECT aren't trivial.
-        const _objRoll = rand();
-        if (_objRoll < .60)      objectiveType = OBJECTIVE_HUNT;
-        else if (_objRoll < .90) { objectiveType = OBJECTIVE_SURVIVE; surviveTimer = 20 + min(level * 2, 40); surviveGoal = surviveTimer; }
-        else                     { objectiveType = OBJECTIVE_COLLECT; stashesCollected = 0; stashesRequired = 3; }
-        if (objectiveType === OBJECTIVE_HUNT)
-            levelTitleObjective = 'CLEAR ALL ENEMIES — THEN BREAK THE BOX';
-        else if (objectiveType === OBJECTIVE_SURVIVE)
-            levelTitleObjective = 'SURVIVE ' + (surviveGoal | 0) + ' SECONDS — THEN BREAK THE BOX';
-        else
-            levelTitleObjective = 'COLLECT ' + stashesRequired + ' STASHES (BLUE) — THEN BREAK THE BOX';
+        // NOTE: SURVIVE and COLLECT are currently disabled — every level uses
+        // the HUNT objective. To re-enable the mix, restore the `_objRoll`
+        // block below. The supporting branches in app.js and the stash spawn
+        // above are left in place so re-enabling is a one-line change.
+        objectiveType = OBJECTIVE_HUNT;
+        levelTitleObjective = 'CLEAR ALL ENEMIES — THEN BREAK THE BOX';
         // IMPROVEMENT 5.2: daily mode pins the seed to today's date so all
         // players get the same level on the same day.
         if (isDailyMode())

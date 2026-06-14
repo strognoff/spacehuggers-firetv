@@ -69,7 +69,7 @@ function makeDebris(pos, color = new Color, amount = 50)
 {
     const color2 = color.lerp(new Color, .5);
     const emitter = new ParticleEmitter(
-        pos, 1, .1, amount, PI, // pos, emitSize, emitTime, emitRate, emiteCone
+        pos, 1, .1, lowGraphicsSettings ? amount>>1 : amount, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         undefined, undefined, // tileIndex, tileSize
         color, color2,       // colorStartA, colorStartB
         color, color2,       // colorEndA, colorEndB
@@ -84,7 +84,8 @@ function makeDebris(pos, color = new Color, amount = 50)
 
 function makeWater(pos, amount=400)
 {
-    // overall spray
+    // overall spray — skip on Fire TV (400 short-lived particles in one burst)
+    if (!lowGraphicsSettings)
     new ParticleEmitter(
         pos, 1, .05, 400, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         0, undefined,        // tileIndex, tileSize
@@ -95,9 +96,9 @@ function makeWater(pos, amount=400)
         .5, 0, 0, 0, 1e9              // randomness, collide, additive, randomColorLinear, renderOrder
     );
 
-    // droplets
+    // droplets — halved on Fire TV
     const emitter = new ParticleEmitter(
-        pos, 1, .1, amount, PI, // pos, emitSize, emitTime, emitRate, emiteCone
+        pos, 1, .1, lowGraphicsSettings ? amount>>1 : amount, PI, // pos, emitSize, emitTime, emitRate, emiteCone
         0, undefined,   // tileIndex, tileSize
         new Color(.8,1,1,.6), new Color(.5,.5,1,.2), // colorStartA, colorStartB
         new Color(.8,1,1,.6), new Color(.5,.5,1,.2), // colorEndA, colorEndB
@@ -450,7 +451,8 @@ function updateSky()
     
     if (rand() < .002)
     {
-        skyParticles.emitRate = clamp(skyParticles.emitRate + rand(120,-120), 200);
+        // Cap rain/snow rate on Fire TV — up to 200/s is too many live particles.
+        skyParticles.emitRate = clamp(skyParticles.emitRate + rand(120,-120), lowGraphicsSettings ? 80 : 200);
         skyParticles.angle = clamp(skyParticles.angle + rand(.3,-.3),PI+.5,PI-.5);
     }
    

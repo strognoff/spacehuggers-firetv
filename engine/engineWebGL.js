@@ -38,6 +38,10 @@ let glCanvas, glContext, glTileTexture, glShader, glPositionData, glColorData,
     glBatchCount, glDirty, glAdditive, glShrinkTilesX, glShrinkTilesY, glOverlay,
     glMatrixUniform, glMatrixBuffer;
 let _currentBlendMode = -1; // tracks active blend mode to skip redundant glFlush calls
+// Cache for glOverlay CSS sync — assigned style.cssText triggers a layout
+// reflow in the WebView compositor.  Only assign when the string changes
+// (typically only on window resize, not every frame).
+let _glOverlayCssText = '';
 
 // Re-creates all GL objects that are destroyed on context loss: shader program,
 // VBO, vertex attrib bindings, texture filters, tile texture, and uniform locations.
@@ -249,6 +253,26 @@ function glPreRender(width, height)
     glCanvas.width = width;
     glCanvas.height = height;
     glContext.viewport(0, 0, width, height);
+
+    // In glOverlay mode the WebGL canvas is a separate DOM element. The engine
+    // updates mainCanvas CSS size every frame (letterboxing / aspect-ratio fit).
+    // Sync glCanvas CSS to match so both canvases scale identically — without
+    // this the sprite layer and the 2D tile layer end up at different visual
+    // scales on Fire TV, making the player appear to float above the ground.
+    //
+    // PERF: only assign when the string has actually changed. Assigning
+    // style.cssText every frame triggers a CSS style-recalculation + layout
+    // reflow in the WebView compositor each frame, which was the root cause of
+    // the progressive frame-drop spiral (dropped=982 → 1484) and eventual
+    // WebGL context loss seen in Fire TV logs.  On a fixed-size canvas the
+    // style only changes on window resize — typically never during a session.
+    if (glOverlay && mainCanvas) {
+        const css = mainCanvas.style.cssText;
+        if (css !== _glOverlayCssText) {
+            _glOverlayCssText = css;
+            glCanvas.style.cssText = css;
+        }
+    }
 
     // set up the shader
     glContext.useProgram(glShader);
