@@ -8,6 +8,23 @@ This document catalogues suggestions that would make the game **more fun / more 
 
 The suggestions are ordered by **impact-per-effort**: the highest-leverage ones are at the top of each section. None of these are required to ship the next build — they are a design menu, not a roadmap.
 
+## Implementation log (2026-06-14)
+
+A subset of the suggestions below — plus a few smaller fixes — have
+been implemented in a follow-up batch after the audit. They are listed
+here so the rest of the document can be read against the *current*
+state of the game. Full details in
+`docs/CHANGES_2026-06-11.md` under "Subsequent changes (2026-06-14)".
+
+| Suggestion | Status | Note |
+|---|---|---|
+| 1.2 — Secondary objective types | ✅ reverted | Objective selection in `nextLevel()` was first hard-set to `OBJECTIVE_HUNT` (change 6.1), then reverted to the original 60 / 30 / 10 mix. SURVIVE / COLLECT branches run again. |
+| 2.1 — Replace numeric LIVES with hearts | Implemented | `app.js:1128-1168` now draws one heart per life using a new `drawHeart` bezier helper. 3 lives = 3 hearts. — change 6.2. |
+| (HUD) — TIME panel: drop personal-best | Implemented | Pass 4's "current / best" was overflowing the 180 px panel on Fire TV. Now shows only the current time; width 130 px. Data model preserved for later. — change 6.3. |
+| (HUD) — THREATS panel: always show count | Implemented | Renamed to `ENEMIES`, value is always `enemiesCount + ' REMAINING'`. — change 6.4. |
+| (Gen) — Empty-map fix | Implemented | Two compounding bugs left levels with no bases / no enemies. (a) the base-building loop returned 1 on the first `buildBase()` failure; (b) `propCount` could roll 0. Both fixed. Plus a defense-in-depth terrain-spawn safety net. — change 6.5. |
+| (Gen) — Initial-spawn life drop | Implemented | `Player` constructor's `--playerLives` was firing on the very first spawn too. Added a `++playerLives` compensation in `finishLevelSetup()`. — change 6.6. |
+
 ---
 
 ## Table of Contents
@@ -66,6 +83,13 @@ if (!enemiesCount && !levelEndTimer.isSet() && !pendingApplyArt &&
 
 ### 1.2 — Add secondary objectives for replay variety
 
+> **Status (2026-06-14):** The HUNT-only restriction is in place per the
+> user's request — see change 6.1 in `CHANGES_2026-06-11.md`. The
+> SURVIVE / COLLECT branches are preserved in the source as dead code
+> so the mix can be restored in a one-line revert when desired. The
+> suggestion below describes the original rollout; it has not been
+> reverted.
+
 The level is procedurally generated but always the same shape: one main base + scattered enemies + one bonus box. To break the monotony, seed the level with **one of N objective types** at generation time:
 
 | Objective | Description |
@@ -98,6 +122,12 @@ This is a single arrow draw per frame (`drawRect` + rotation), so it's effective
 The current "I got hit" feedback is a 0.5-second white flash on the player sprite (`appObjects.js:39-50`). That's it. No hit-pause, no sound, no knockback, no visible health. The player often doesn't realize they were hit until the death screen appears.
 
 ### 2.1 — Add a player health bar (HP, not lives)
+
+> **Status (2026-06-14):** The first half of this suggestion (replace
+> the numeric LIVES counter with one heart per life) is implemented —
+> see change 6.2 in `CHANGES_2026-06-11.md`. The deeper "4-HP per life
+> + non-lethal damage" idea below has not been implemented; the player
+> is still one-hit-killed.
 
 **Today:** LIVES counts down 3 → 2 → 1 → 0. Each "life" is one full player character. The player has no health; one strong-enough hit kills instantly.
 
@@ -220,6 +250,13 @@ The grenade has a 3-second fuse with a beep (`appObjects.js:395-399`), but no on
 
 ### 4.2 — Show "current best time" alongside the TIME panel
 
+> **Status (2026-06-14):** The "current / best" suffix was tried and
+> rolled back in the same batch — it overflowed the 180 px TIME panel on
+> narrow Fire TV screens. The TIME panel now shows only the player's
+> own counter (see change 6.3 in `CHANGES_2026-06-11.md`). The
+> localStorage data model (`loadLevelBests` / `saveLevelBests`) is
+> preserved so this can be re-surfaced later in a wider panel.
+
 **Today:** the TIME panel just shows elapsed time. The player has no idea if 0:42 is good.
 
 **Suggestion:** On the very first level of a session, the TIME panel is just "0:00". From level 2 onward, show both the current run and the personal best for this level (e.g., "0:42 / 0:38"). The personal best is per-level (keyed by `levelSeed`), and stored in localStorage. New best → flash a "NEW BEST" indicator.
@@ -229,6 +266,13 @@ The grenade has a 3-second fuse with a beep (`appObjects.js:395-399`), but no on
 ---
 
 ### 4.3 — Make the bottom THREATS panel show enemy types
+
+> **Status (2026-06-14):** The THREATS panel was renamed to ENEMIES
+> and its value simplified to always show `X REMAINING` (no
+> "AREA CLEAR" / "CLEAR THEM ALL" status text) — see change 6.4 in
+> `CHANGES_2026-06-11.md`. The per-type indicator idea below has not
+> been implemented; the bottom-edge enemy dots are still the flat
+> colored rectangles from the original pass-1 HUD.
 
 **Today:** the bottom-edge enemy indicators (`app.js:649-658`) are flat color rectangles, no indication of enemy type. A weak/strong/elite/grenade-thrower all look the same.
 

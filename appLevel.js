@@ -653,8 +653,13 @@ function buildBase()
 
         if (topFloor || floorSpace > 1)
         {
-            // spawn enemies
-            for(let i = propCount; i--;)
+            // spawn enemies — guarantee at least 1 on the top floor so
+            // `levelEnemyCount` always decrements and the generateLevel()
+            // loop terminates. If propCount rolled 0, a base was previously
+            // built with zero enemies, the loop spun to 99 tries, and the
+            // level retried 4x before giving up — leaving an empty map.
+            const enemyCount = topFloor ? max(1, propCount) : propCount;
+            for(let i = enemyCount; i--;)
             {
                 const pos = floorBottomCenterPos.add(vec2(randSeeded( floorWidth-1,-floorWidth+1),.7));
                 new Enemy(pos);
@@ -719,13 +724,20 @@ function generateLevel()
     checkpointPos = raycastHit.add(vec2(0,1)).int().add(vec2(.5));
 
     // random bases until there enough enemies
-    for(let tries=99;levelEnemyCount>0;)
+    //
+    // PREVIOUS BUG: this loop returned 1 on the first `buildBase()` failure,
+    // leaving the entire level with zero bases. `buildBase()` can legitimately
+    // fail (its own inner position-finder times out when 99 random X-positions
+    // are all within 30 of the player). Now we `continue` instead and let
+    // `tries` bound the total work; the safety net below catches the case
+    // where every single attempt failed to spawn an enemy.
+    for(let tries=99; levelEnemyCount>0; --tries)
     {
-        if (!tries--)
-            return 1; // count not spawn enemies
+        if (!tries)
+            return 1; // 99 consecutive buildBase() failures — give up
 
         if (buildBase())
-            return 1;
+            continue; // one bad roll, try the next random position
     }
 
     // build checkpoints
@@ -752,6 +764,28 @@ function generateLevel()
     {
         if (!enemy || enemy.destroyed) continue;
         connectToReachable(vec2(enemy.pos.x | 0, enemy.pos.y | 0), _reachableCache);
+    }
+
+    // ── Safety net ────────────────────────────────────────────────────────────
+    // If the base-building loop somehow ended with zero enemies (e.g. the
+    // random stream rolled `propCount=0` on every base's top floor and the
+    // `for(let tries=99;levelEnemyCount>0;)` loop returned 1 before our
+    // top-floor guarantee could fire), the player would be presented with
+    // an empty map and a locked BonusBox. Force-spawn a handful of enemies
+    // directly on the terrain so the level always has something to hunt.
+    if (liveEnemies.size === 0)
+    {
+        let spawned = 0;
+        for (let tries = 40; tries-- && spawned < 7;)
+        {
+            const ex = randSeeded(levelSize.x - 20, 20);
+            const hit = tileCollisionRaycast(vec2(ex, levelSize.y), vec2(ex, 0));
+            if (hit && abs(checkpointPos.x - ex) > 20)
+            {
+                new Enemy(hit.add(vec2(0, 2)));
+                ++spawned;
+            }
+        }
     }
 }
 
@@ -1016,6 +1050,12 @@ function finishLevelSetup()
 
     // spawn player (Player constructor creates the weapon internally)
     players = [];
+    // The Player constructor unconditionally does `--playerLives;` (see
+    // appCharacters.js) so each spawn costs one life. The "join mid-game"
+    // path in app.js compensates with a `++playerLives` before new Player();
+    // we mirror that here so the very first spawn doesn't silently drop the
+    // player from 3 lives to 2.
+    ++playerLives;
     new Player(checkpointPos);
     if (typeof players !== 'undefined' && players[0] && players[0].weapon) {
         players[0].weapon.weaponType = weaponType_pistol;
@@ -1095,12 +1135,16 @@ function nextLevel()
         // IMPROVEMENT 1.2: pick an objective type for this level. The mix is
         // 60% HUNT (default), 30% SURVIVE, 10% COLLECT. The survive time
         // scales with the level so late-game SURVIVE/COLLECT aren't trivial.
-        // NOTE: SURVIVE and COLLECT are currently disabled — every level uses
-        // the HUNT objective. To re-enable the mix, restore the `_objRoll`
-        // block below. The supporting branches in app.js and the stash spawn
-        // above are left in place so re-enabling is a one-line change.
-        objectiveType = OBJECTIVE_HUNT;
-        levelTitleObjective = 'CLEAR ALL ENEMIES — THEN BREAK THE BOX';
+        const _objRoll = rand();
+        if (_objRoll < .60)      objectiveType = OBJECTIVE_HUNT;
+        else if (_objRoll < .90) { objectiveType = OBJECTIVE_SURVIVE; surviveTimer = 20 + min(level * 2, 40); surviveGoal = surviveTimer; }
+        else                     { objectiveType = OBJECTIVE_COLLECT; stashesCollected = 0; stashesRequired = 3; }
+        if (objectiveType === OBJECTIVE_HUNT)
+            levelTitleObjective = 'CLEAR ALL ENEMIES — THEN BREAK THE BOX';
+        else if (objectiveType === OBJECTIVE_SURVIVE)
+            levelTitleObjective = 'SURVIVE ' + (surviveGoal | 0) + ' SECONDS — THEN BREAK THE BOX';
+        else
+            levelTitleObjective = 'COLLECT ' + stashesRequired + ' STASHES (BLUE) — THEN BREAK THE BOX';
         // IMPROVEMENT 5.2: daily mode pins the seed to today's date so all
         // players get the same level on the same day.
         if (isDailyMode())

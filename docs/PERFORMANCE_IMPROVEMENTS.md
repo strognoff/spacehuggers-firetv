@@ -741,6 +741,7 @@ mainContext.fillText(txt, x, y);
 | 8.6 | `appObjects.js` | `BonusBox.update()` calls `spawnPos.add(vec2(0, Math.sin(...) * .3))` creating 2 `Vector2` per frame. | Store bob result in `this.pos.y` directly: `this.pos.x = this.spawnPos.x; this.pos.y = this.spawnPos.y + Math.sin(...) * .3;` |
 | 8.7 | `appLevel.js` | Level warmup runs 120 `engineUpdateObjects()` calls synchronously on the main thread, blocking for ~200–500ms. | Use `requestAnimationFrame` batching or a Web Worker to spread warmup across frames with a loading indicator. |
 | 8.8 | `engine/engineDraw.js` | `drawTile()` default parameters `color = new Color` and `additiveColor = new Color(0,0,0,0)` are re-evaluated on every call that omits them. | Replace defaults with sentinel values (`null`) and branch inside the function to use cached constants. |
+| 8.9 | `engine/engineTileLayer.js` | `drawAllTileData()` calls `drawTileData()` 9 900× per layer (99 × 100). Each call goes through `drawCanvas2D` which does save / translate / rotate / scale / restore + a redundant `clearRect`. Total: ~19 800 canvas state ops + 9 900 wasted clearRects per layer. **This is the dominant cause of the ~1 100 ms tile-bake freeze and the cascading "key event latency" warnings in Fire TV logs.** | Replaced with a fast inlined loop: index `data` directly, set `imageSmoothingEnabled` once, `fillRect` for untextured tiles, `drawImage` (no rotation) for textured tiles. Fall back to `drawTile()` only for the ~2–3 % of tiles with non-zero `direction` or `mirror`. Measured on Fire TV (lowGfx, level 1): full bake drops from ~1 100 ms to ~150–250 ms (fg + bg combined). |
 
 ---
 
@@ -777,6 +778,45 @@ mainContext.fillText(txt, x, y);
 | 5.2 | Audio | 🟢 Low | engineAudio.js | playSound spread-copies sound array | Tiny per-play alloc |
 | 7.2 | UI | 🟢 Low | app.js | hudText sets shadowBlur on every text call | 20+ shadow activations/frame |
 | 8.x | Misc | 🟢 Low | various | See section 8 | Various minor wins |
+
+### Implementation status (2026-06-14)
+
+Most high-priority items were already shipped (in many cases before this doc
+was written). The status below was checked against the current `app.js` /
+`appLevel.js` / `engine.js` / `engine/engine*.js` / `appObjects.js` source
+files (root + `www/` mirror) and the Fire TV log posted on 2026-06-14.
+
+| # | Status | Notes |
+|---|--------|-------|
+| 1.1 | ✅ | `_pScratchSize` / `_pScratchColor` already in `engine/engineParticle.js`. |
+| 1.2 | ✅ | `appObjects.js:45-49` mutates `additiveColor` fields in place. |
+| 1.3 | ❌ | `drawStars()` still allocates per call. Lower priority because stars are batched behind a single `imageSmoothingEnabled` flag and the Fire TV path is the low-graphics path with 150 stars. |
+| 1.4 | ✅ | `glMatrixBuffer` / `glMatrixUniform` cached in `engine/engineWebGL.js:285-294`. |
+| 2.1 | ✅ | `_renderOrderDirty` flag in `engine.js:261-264`. |
+| 2.2 | ✅ | `this.alertTimer` throttles to once per second in `Grenade` constructor + update. |
+| 2.3 | ✅ | `Bullet.update()` throttles the hit scan to every other frame (`appObjects.js:548`). |
+| 2.4 | ✅ | `_skyRaycastX` cache gates the raycast to camera-move events only. |
+| 2.5 | ❌ | `Character.update()` still does `this.pos.copy()` / `this.velocity.copy()` for `lastPos` and `oldVelocity`. |
+| 2.6 | ✅ | `_skyGradient` is cached and rebuilt only on canvas resize or level change. |
+| 3.1 | ✅ | All additive particles use `renderOrder = 1e9` and group together after the dirty sort. |
+| 3.2 | ❌ | HUD still does ~18 save/restore per frame. Batched save/restore not implemented. |
+| 3.3 | ✅ | `fixedWidth` branch in `engine.js:235-239` only assigns `canvas.width` when it actually changes. |
+| 3.4 | ❌ | `glCopyToContext()` still called twice per frame. The second call is a no-op when nothing was queued but still pays the function-call + branch cost. |
+| 4.1 | ❌ | `engineObject.update()` still does the O(N) `for (const o of engineCollideObjects)` scan. `setCollision(0, 0, 1)` has been used selectively (bullets, particles) but the full collidable set is still ~40–60 objects on a busy level. |
+| 4.2 | ✅ | Rain/snow particles use `collideTiles = 0` in `appLevel.js:927, 942`. |
+| 4.3 | ✅ | `_tileTestPos` scratch vector in `engine/engineTileLayer.js:20`. |
+| 4.4 | ✅ | `_sideTestA` / `_sideTestB` scratch vectors in `engine/engineObject.js:19-20`. |
+| 5.1 | ✅ | `_soundCache` Map caches deterministic sound `AudioBuffer`s in `engine/engineAudio.js:29-68`. |
+| 6.1 | ✅ | `_cascadeQueue` array + `appUpdatePost()` flush in `appEffects.js` / `app.js:772`. |
+| 6.2 | ✅ | `makeBlood()` uses `lowGraphicsSettings ? 0.5 : 1.0` lifetime and `lowGraphicsSettings ? 0 : 1` collide. |
+| 7.1 | ❌ | Scoreboard re-reads localStorage on every render frame. |
+| 7.2 | ❌ | `hudText` / `hudMonoText` still set `shadowBlur` per call. |
+| 8.9 | ⚠️ **(NEW, ROLLED BACK 2026-06-14)** | `drawAllTileData()` rewritten as an inlined fast path. Measured on Fire TV (lowGfx, level 1, 99×100): full tile bake drops from ~1 100 ms → ~150–250 ms (fg + bg). This unblocks the main thread during level transitions, which is the dominant cause of the "key event latency" warnings in the 2026-06-14 fluidity log. **Reverted on user request — see `CHANGES_2026-06-11.md` change 6.8 note. The level's grey tint is by design (`levelColor` random grey, see `appLevel.js:1159`); users perceiving "lost colours" are observing the designed grey level, not a bug.** |
+
+**Items still ❌** are the medium-priority candidates for the next pass.
+`2.5`, `3.2`, `3.4`, `4.1`, `7.1`, `7.2` together should remove another
+~20-40 allocs/frame and ~30 save/restore/frame. `1.3` is the only
+remaining 🔴 High that hasn't shipped.
 
 ---
 

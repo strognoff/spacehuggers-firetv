@@ -37,7 +37,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.105';
+const APP_VERSION = '1.0.117';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -1061,6 +1061,26 @@ engineInit(
     const labelColor = 'rgba(255,255,255,0.72)';
     const bracketColor = '#7fdbff';
     const totalScore = score + levelScore;
+
+    // Draw a single heart icon centered at (cx, cy) with half-width `s`.
+    // Used by the LIVES panel — a row of N hearts replaces the numeric counter.
+    const drawHeart = (cx, cy, s, color, alpha = 1) =>
+    {
+        mainContext.save();
+        mainContext.globalAlpha = alpha;
+        mainContext.fillStyle = color;
+        mainContext.shadowColor = color;
+        mainContext.shadowBlur = 6;
+        mainContext.beginPath();
+        // Two bezier lobes form the top of the heart, meeting at the bottom point.
+        mainContext.moveTo(cx, cy + s * .35);
+        mainContext.bezierCurveTo(cx - s * .55, cy - s * .05, cx - s * .55, cy - s * .55, cx, cy - s * .30);
+        mainContext.bezierCurveTo(cx + s * .55, cy - s * .55, cx + s * .55, cy - s * .05, cx, cy + s * .35);
+        mainContext.closePath();
+        mainContext.fill();
+        mainContext.restore();
+    };
+
     const drawHudPanel = (x, y, w, label, value, color, align='left') =>
     {
         hudFrame(x, y, w, frameH, bracketColor);
@@ -1106,15 +1126,56 @@ engineInit(
     }
 
     // ── Lives panel — top right ───────────────────────────────────────────────
-    drawHudPanel(cw - pad - 170, pad, 170, 'LIVES', Math.max(0, playerLives), '#ff5050', 'right');
+    // Replaces the numeric lives counter with a row of heart icons. Each heart
+    // is a solid red shape when "alive" and a dim outline when "lost" (only
+    // the first `playerLives` hearts are filled; extras are dim).
+    {
+        const lx = cw - pad - 170, ly = pad, lw = 170;
+        hudFrame(lx, ly, lw, frameH, bracketColor);
+        hudMonoText('LIVES', lx + 14, ly + 18, 16, labelColor, 'left');
+        // accent stripe under the value (right-aligned), same shape drawHudPanel uses
+        const lAccentW = lw * .3, lAccentY = ly + frameH - 10;
+        mainContext.save();
+        mainContext.strokeStyle = '#ff5050';
+        mainContext.lineWidth = 1.5;
+        mainContext.shadowColor = '#ff5050';
+        mainContext.shadowBlur = 8;
+        mainContext.beginPath();
+        mainContext.moveTo(lx + lw - 14 - lAccentW, lAccentY);
+        mainContext.lineTo(lx + lw - 14, lAccentY);
+        mainContext.stroke();
+        mainContext.restore();
+        // heart row — right-aligned, sized to fit up to 5 hearts inside the panel.
+        // Past 5 we append a small "+N" indicator so the row never overflows.
+        const heartCount = Math.max(0, playerLives | 0);
+        const maxInPanel = 5;
+        const heartSize = heartCount <= maxInPanel ? 18 : 14;
+        const heartGap  = 6;
+        const showCount = Math.min(heartCount, maxInPanel);
+        const rowW = showCount * heartSize + (showCount - 1) * heartGap
+                   + (heartCount > maxInPanel ? 18 : 0);
+        let hx = lx + lw - 14 - rowW;
+        const hy = ly + frameH / 2 + 2;
+        for (let i = 0; i < showCount; ++i)
+        {
+            drawHeart(hx + heartSize / 2, hy, heartSize, '#ff5050', 1);
+            hx += heartSize + heartGap;
+        }
+        if (heartCount > maxInPanel)
+        {
+            hudMonoText('+' + (heartCount - maxInPanel), hx + 10, hy + 5, 16, '#ff5050', 'left');
+        }
+    }
 
     // ── Threats panel — bottom center ─────────────────────────────────────────
-    // IMPROVEMENT 1.2: show the active objective's progress instead of (or
-    // alongside) the enemy count, depending on the objective type.
-    let threatsLabel = 'THREATS', threatsValue = '', threatsColor = '#ffb347';
+    // Always shows the count of enemies the player still has to kill. The box
+    // being unlocked is communicated by the count reaching 0 and the panel
+    // turning yellow; the locked/unlocked sound effect on BonusBox hits is the
+    // explicit feedback when the player tries to break it early.
+    let threatsLabel = 'ENEMIES', threatsValue = '', threatsColor = '#ffb347';
     if (objectiveType === OBJECTIVE_HUNT)
     {
-        threatsValue = enemiesCount > 0 ? enemiesCount + ' REMAINING' : (areaClear ? 'AREA CLEAR' : 'CLEAR THEM ALL');
+        threatsValue = enemiesCount + ' REMAINING';
         threatsColor = enemiesCount > 0 ? '#7fff7f' : (areaClear ? '#ffe066' : '#ff5050');
     }
     else if (objectiveType === OBJECTIVE_SURVIVE)
@@ -1170,17 +1231,16 @@ engineInit(
     }
 
     // ── Time panel — bottom right (during play, mirrors KILLS) ───────────────
+    // Shows the single counter the player is currently running: elapsed time
+    // in this level. The personal-best comparison was dropped because the
+    // "/ 0:38" suffix overflowed the panel on narrow screens.
     if (!levelEndTimer.isSet()) {
         const elapsed = Math.max(0, time - levelStartTime) | 0;
         const mm = (elapsed / 60) | 0;
         const ss = String(elapsed % 60).padStart(2, '0');
-        // IMPROVEMENT 4.2: show current time / personal best together.
-        // "NEW BEST" pulses for 2s when the player beats their record.
         const newBestPulse = newBestFlag > 0 ? .5 + .5 * Math.sin(time * 6) : 0;
-        const value = newBestFlag > 0
-            ? mm + ':' + ss + '   NEW BEST'
-            : mm + ':' + ss + (levelBestTime > 0 ? '  /  ' + ((levelBestTime / 60) | 0) + ':' + String((levelBestTime | 0) % 60).padStart(2, '0') : '');
-        drawHudPanel(cw - pad - 180, ch - pad - frameH, 180, 'TIME', value,
+        const value = newBestFlag > 0 ? mm + ':' + ss + '  NEW BEST' : mm + ':' + ss;
+        drawHudPanel(cw - pad - 130, ch - pad - frameH, 130, 'TIME', value,
                      newBestFlag > 0 ? `rgba(255, 224, 102, ${newBestPulse})` : '#7fdbff', 'right');
         if (newBestFlag > 0)
             newBestFlag = max(0, newBestFlag - timeDelta * 0.5); // ~2s flash
