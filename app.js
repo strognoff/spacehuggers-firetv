@@ -27,7 +27,14 @@ if (typeof CanvasRenderingContext2D !== 'undefined' && !CanvasRenderingContext2D
 }
 
 const clampCamera = !debug;
-const lowGraphicsSettings = glOverlay = !window['chrome']; // only chromium uses high settings
+// Fire TV / Android WebView: window.chrome is truthy in Chromium-based WebViews
+// (same as desktop Chrome), so !window['chrome'] is always false there and
+// lowGraphicsSettings would wrongly be false — causing expensive canvas shadowBlur
+// on every HUD text call → GPU memory pressure → WebGL context loss.
+// Detect Android WebView explicitly via the user-agent ('wv' token or 'Android')
+// so Fire TV gets lowGraphicsSettings=true and all shadowBlur is suppressed.
+const _isAndroidWebView = /Android/.test(navigator.userAgent);
+const lowGraphicsSettings = glOverlay = _isAndroidWebView || !window['chrome'];
 // Camera scale: 18px per world unit on start, 16px default — 2x zoom-out
 // Zoom: 2x from the zoomed-out 18/16 values — restores original 36/32 scale.
 const startCameraScale = 2*18;
@@ -37,7 +44,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.117';
+const APP_VERSION = '1.0.118';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -433,7 +440,7 @@ const hudFrame = (x, y, w, h, color, alpha=.65) => {
     mainContext.strokeStyle = color;
     mainContext.lineWidth   = 1.5;
     mainContext.shadowColor = color;
-    mainContext.shadowBlur  = 8;
+    mainContext.shadowBlur  = lowGraphicsSettings ? 0 : 8;
     mainContext.beginPath();
     mainContext.moveTo(ix, iy + bracket); mainContext.lineTo(ix, iy); mainContext.lineTo(ix + bracket, iy);
     mainContext.moveTo(ix + iw - bracket, iy); mainContext.lineTo(ix + iw, iy); mainContext.lineTo(ix + iw, iy + bracket);
@@ -926,7 +933,7 @@ engineInit(
         mainContext.textBaseline = 'top';
         mainContext.fillStyle = '#fff';
         mainContext.shadowColor = 'rgba(0,0,0,0.95)';
-        mainContext.shadowBlur = 8;
+        mainContext.shadowBlur = lowGraphicsSettings ? 0 : 8;
         mainContext.fillText(_hudHintLabel, 16, h - 36);
         mainContext.restore();
     }
@@ -972,7 +979,7 @@ engineInit(
                 mainContext.rotate(ang);
                 mainContext.fillStyle = `rgba(255, 224, 102, ${pulse})`;
                 mainContext.shadowColor = 'rgba(255, 224, 102, 0.9)';
-                mainContext.shadowBlur = 10;
+                mainContext.shadowBlur = lowGraphicsSettings ? 0 : 10;
                 // Triangle pointing along +X (right) — rotation aligns it to the box.
                 mainContext.beginPath();
                 mainContext.moveTo(18, 0);
@@ -990,7 +997,7 @@ engineInit(
                 mainContext.textBaseline = 'middle';
                 mainContext.fillStyle = `rgba(255, 224, 102, ${pulse})`;
                 mainContext.shadowColor = 'rgba(0,0,0,0.95)';
-                mainContext.shadowBlur = 6;
+                mainContext.shadowBlur = lowGraphicsSettings ? 0 : 6;
                 mainContext.fillText('BOX', ax, ay + 26);
                 mainContext.restore();
             }
@@ -1070,7 +1077,7 @@ engineInit(
         mainContext.globalAlpha = alpha;
         mainContext.fillStyle = color;
         mainContext.shadowColor = color;
-        mainContext.shadowBlur = 6;
+        mainContext.shadowBlur = lowGraphicsSettings ? 0 : 6;
         mainContext.beginPath();
         // Two bezier lobes form the top of the heart, meeting at the bottom point.
         mainContext.moveTo(cx, cy + s * .35);
@@ -1090,7 +1097,7 @@ engineInit(
         mainContext.strokeStyle = color;
         mainContext.lineWidth = 1.5;
         mainContext.shadowColor = color;
-        mainContext.shadowBlur = 8;
+        mainContext.shadowBlur = lowGraphicsSettings ? 0 : 8;
         mainContext.beginPath();
         if (align == 'center')
         {
@@ -1139,7 +1146,7 @@ engineInit(
         mainContext.strokeStyle = '#ff5050';
         mainContext.lineWidth = 1.5;
         mainContext.shadowColor = '#ff5050';
-        mainContext.shadowBlur = 8;
+        mainContext.shadowBlur = lowGraphicsSettings ? 0 : 8;
         mainContext.beginPath();
         mainContext.moveTo(lx + lw - 14 - lAccentW, lAccentY);
         mainContext.lineTo(lx + lw - 14, lAccentY);
@@ -1682,7 +1689,7 @@ engineInit(
                     // left accent bar — neon cyan glow
                     mainContext.fillStyle = '#7fdbff';
                     mainContext.shadowColor = '#7fdbff';
-                    mainContext.shadowBlur  = 8;
+                    mainContext.shadowBlur  = lowGraphicsSettings ? 0 : 8;
                     mainContext.fillRect(px + 6, ry + 7, 3, ROW_H - 14);
                     mainContext.restore();
                 }
@@ -1884,7 +1891,7 @@ engineInit(
             mainContext.textBaseline = 'middle';
             mainContext.fillStyle = color;
             mainContext.shadowColor = 'rgba(0,0,0,0.95)';
-            mainContext.shadowBlur = 5;
+            mainContext.shadowBlur = lowGraphicsSettings ? 0 : 5;
             mainContext.fillText('+' + p.value, sp.x, sp.y);
             mainContext.restore();
         }
