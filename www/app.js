@@ -44,7 +44,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.119';
+const APP_VERSION = '1.0.121';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -1717,6 +1717,8 @@ engineInit(
             });
 
             // Hint strip at the bottom of the panel
+            hudText('Menuboard.Online \u2014 Stream Media for Hotels, Restaurants, Salons, GYM and Media Agencies',
+                    cx, py + PH - 28, 10, 'rgba(255,224,102,0.55)', 'center');
             hudText('\u2191\u2193  Navigate     OK  Select',
                     cx, py + PH - 14, 11, 'rgba(110,130,170,0.65)', 'center');
         }
