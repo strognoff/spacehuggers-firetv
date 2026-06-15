@@ -44,7 +44,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.121';
+const APP_VERSION = '1.0.124';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -1505,7 +1505,7 @@ engineInit(
             mainContext.stroke();
             mainContext.restore();
 
-            hudText('Fire TV port \u2014 Jeff Cechinel', cx, cy + 132, 14, '#aaa', 'center');
+            hudText('Fire TV port \u2014 Jeff Cechinel(X: @cechineljeff)', cx, cy + 132, 14, '#aaa', 'center');
             hudText('Version ' + APP_VERSION + '   \u00B7   Music: ' + (currentMusicStyleName || 'calm mix'),
                    cx, cy + 152, 13, '#8aa', 'center');
 
@@ -1717,7 +1717,7 @@ engineInit(
             });
 
             // Hint strip at the bottom of the panel
-            hudText('Menuboard.Online \u2014 Stream Media for Hotels, Restaurants, Salons, GYM and Media Agencies',
+            hudText('Menuboard.Online \u2014 Stream Media',
                     cx, py + PH - 28, 10, 'rgba(255,224,102,0.55)', 'center');
             hudText('\u2191\u2193  Navigate     OK  Select',
                     cx, py + PH - 14, 11, 'rgba(110,130,170,0.65)', 'center');
