@@ -44,7 +44,7 @@ const maxPlayers = 4;
 const team_none = 0;
 const team_player = 1;
 const team_enemy = 2;
-const APP_VERSION = '1.0.124';
+const APP_VERSION = '1.0.125';
 
 let updateWindowSize, renderWindowSize, gameplayWindowSize;
 let minDeadTime = 0;
@@ -1474,9 +1474,9 @@ engineInit(
             mainContext.stroke();
             mainContext.restore();
 
-            hudText('Original game', cx, cy - 88, 18, '#aaa', 'center');
-            hudText('Frank Force', cx, cy - 64, 22, '#fff', 'center');
-            hudText('X: @KilledByAPixel', cx, cy - 42, 16, '#8ef', 'center');
+            hudText('Fire TV Ports plus MODS', cx, cy - 88, 18, '#aaa', 'center');
+            hudText('Jeff Cechinel', cx, cy - 64, 22, '#fff', 'center');
+            hudText('X: @cechineljeff', cx, cy - 42, 16, '#8ef', 'center');
 
             // IMPROVEMENT 6.4: controls list embedded in the About screen.
             mainContext.save();
@@ -1505,7 +1505,7 @@ engineInit(
             mainContext.stroke();
             mainContext.restore();
 
-            hudText('Fire TV port \u2014 Jeff Cechinel(X: @cechineljeff)', cx, cy + 132, 14, '#aaa', 'center');
+            hudText('Original \u2014 Frank Force X: @KilledByAPixel', cx, cy + 132, 14, '#aaa', 'center');
             hudText('Version ' + APP_VERSION + '   \u00B7   Music: ' + (currentMusicStyleName || 'calm mix'),
                    cx, cy + 152, 13, '#8aa', 'center');
 
