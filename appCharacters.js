@@ -430,6 +430,16 @@ class Character extends GameObject
         if (this.isDead())
             return super.collideWithObject(o);
 
+        // IMPROVEMENT: enemies must not damage each other on contact —
+        // only the player takes contact damage from enemy collisions.
+        // Without this guard the crushing branch (1e3 = instant kill)
+        // and the kinetic `m > 1` branch fire on every enemy-vs-enemy
+        // bounce, so a fast-moving or falling enemy will kill its own
+        // squad and the level effectively half-empties before the player
+        // engages. Player and player collisions still take damage.
+        if (o.isEnemy && this.isEnemy)
+            return super.collideWithObject(o);
+
         if (o.velocity.lengthSquared() > .04)
         {
             const v = o.velocity.subtract(this.velocity);
